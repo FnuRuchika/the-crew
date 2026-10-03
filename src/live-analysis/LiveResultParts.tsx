@@ -239,6 +239,7 @@ const ERROR_COPY: Record<string, { title: string; hint?: string; icon: LucideIco
   backend_unreachable: { title: 'Crew server unreachable', hint: 'Start it: cd backend && .venv/bin/uvicorn main:app --port 8000', icon: CloudOff },
   auth_failed: { title: 'Gemini key rejected', hint: 'Check GEMINI_API_KEY in backend/.env.', icon: KeyRound },
   rate_limited: { title: 'Rate limit reached', hint: 'Wait a few seconds, then retry.', icon: RotateCcw },
+  gemini_unavailable: { title: 'Gemini is busy', hint: 'Google reports high demand. Retrying in a few seconds usually works.', icon: RotateCcw },
   timeout: { title: 'Transmission timed out', icon: CloudOff },
   malformed_response: { title: 'Unreadable analysis', hint: "Gemini's answer didn't pass validation. Retrying usually works.", icon: TriangleAlert },
   model_unavailable: { title: 'Model unavailable', hint: 'Set GEMINI_MODEL in backend/.env to a model your key can use.', icon: TriangleAlert },

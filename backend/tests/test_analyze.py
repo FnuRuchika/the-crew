@@ -155,3 +155,46 @@ def test_locate_evidence_tolerates_whitespace_and_case():
     s, e = locate_evidence(text, "gift cards and read")
     assert text[s:e] == "gift cards   and READ"
     assert locate_evidence(text, "wire transfer") is None
+
+
+def test_falls_back_to_next_model_on_high_demand():
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.path)
+        if "primary" in req.url.path:
+            return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
+        return gemini_reply(GOOD)
+
+    main.app.state.gemini = GeminiService(
+        GeminiConfig(api_key=FAKE_KEY, model="primary", timeout_seconds=5, fallback_models=("backup",)),
+        transport=httpx.MockTransport(handler),
+    )
+    r = client.post("/api/analyze", json={"text": BANK})
+    assert r.status_code == 200 and r.json()["model"] == "backup"
+    assert [p.split("/")[-1] for p in calls] == ["primary:generateContent", "backup:generateContent"]
+
+
+def test_no_fallback_for_auth_failure_and_clean_503_when_all_busy():
+    calls: list[str] = []
+
+    def auth_fail(req):
+        calls.append(req.url.path)
+        return httpx.Response(403, json={})
+
+    main.app.state.gemini = GeminiService(
+        GeminiConfig(api_key=FAKE_KEY, model="primary", timeout_seconds=5, fallback_models=("backup",)), transport=httpx.MockTransport(auth_fail)
+    )
+    assert client.post("/api/analyze", json={"text": BANK}).json()["error"]["code"] == "auth_failed"
+    assert len(calls) == 1  # a bad key is not a reason to try another model
+
+    main.app.state.gemini = GeminiService(
+        GeminiConfig(api_key=FAKE_KEY, model="primary", timeout_seconds=5, fallback_models=("backup",)),
+        transport=httpx.MockTransport(lambda _: httpx.Response(503, json={})),
+    )
+    r = client.post("/api/analyze", json={"text": BANK})
+    assert r.status_code == 503 and r.json()["error"] == {
+        "code": "gemini_unavailable",
+        "message": "Gemini is experiencing high demand right now. Please retry in a moment.",
+        "retryable": True,
+    }

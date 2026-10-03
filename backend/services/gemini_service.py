@@ -28,7 +28,12 @@ from models.analysis import (
 
 log = logging.getLogger("the_crew.gemini")
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+# gemini-3.5-flash-lite: fast (~2s), structured output, recommended by Google for new projects.
+# Benchmarked Oct 2026: the larger 3.6–3.8 Flash models were returning 503 "high demand".
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_FALLBACKS = ("gemini-3.1-flash-lite",)
+# Upstream conditions where trying the next model is worthwhile.
+FALLBACK_CODES = {"gemini_unavailable", "upstream_error", "timeout", "model_unavailable", "rate_limited"}
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 
@@ -48,13 +53,21 @@ class GeminiConfig:
     api_key: str | None
     model: str
     timeout_seconds: float
+    fallback_models: tuple[str, ...] = ()
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return (self.model, *(m for m in self.fallback_models if m != self.model))
 
     @classmethod
     def from_env(cls) -> "GeminiConfig":
+        raw_fallbacks = os.getenv("GEMINI_FALLBACK_MODELS")
+        fallbacks = tuple(m.strip() for m in raw_fallbacks.split(",") if m.strip()) if raw_fallbacks is not None else DEFAULT_FALLBACKS
         return cls(
             api_key=(os.getenv("GEMINI_API_KEY") or "").strip() or None,
             model=(os.getenv("GEMINI_MODEL") or DEFAULT_MODEL).strip(),
-            timeout_seconds=float(os.getenv("GEMINI_TIMEOUT_SECONDS") or 20),
+            timeout_seconds=float(os.getenv("GEMINI_TIMEOUT_SECONDS") or 12),
+            fallback_models=fallbacks,
         )
 
 
@@ -75,7 +88,9 @@ Rules:
    communication: a short contiguous phrase (ideally 2-12 words). Never paraphrase it.
 3. Only report signals that are actually present. Ordinary, friendly or routine messages
    should return an empty signals list and is_suspicious=false.
-4. One signal per distinct tactic. Do not repeat the same type for the same phrase.
+4. One signal per distinct tactic. Do not repeat the same type for the same phrase. A phrase may
+   show more than one tactic: any request to send, transfer or pay money (or to buy gift cards,
+   crypto, etc.) is ALWAYS also an unusual_payment_request signal, even if it is urgent too.
 5. confidence is 0.0-1.0: how clearly the tactic is present in the text.
 6. "explanation" is one plain-language sentence for a non-technical, possibly older reader.
    Explain the tactic. Do not accuse anyone with certainty.
@@ -228,7 +243,21 @@ class GeminiService:
                 503,
                 False,
             )
-        url = f"{API_ROOT}/models/{self.config.model}:generateContent"
+        # Try the primary model, then fallbacks, only for transient upstream problems.
+        last: GeminiError | None = None
+        for model in self.config.models:
+            try:
+                return await self._analyze_with(model, text)
+            except GeminiError as e:
+                last = e
+                if e.code not in FALLBACK_CODES:
+                    raise
+                log.warning("model %s failed (%s); trying next model if any", model, e.code)
+        assert last is not None
+        raise last
+
+    async def _analyze_with(self, model: str, text: str) -> AnalyzeResponse:
+        url = f"{API_ROOT}/models/{model}:generateContent"
         started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout_seconds, transport=self._transport) as client:
@@ -245,7 +274,9 @@ class GeminiService:
         if resp.status_code in (401, 403):
             raise GeminiError("auth_failed", "Gemini rejected the server's API key.", 502, False)
         if resp.status_code == 404:
-            raise GeminiError("model_unavailable", f"Model '{self.config.model}' is not available for this key.", 502, False)
+            raise GeminiError("model_unavailable", f"Model '{model}' is not available for this key.", 502, False)
+        if resp.status_code == 503:
+            raise GeminiError("gemini_unavailable", "Gemini is experiencing high demand right now. Please retry in a moment.", 503, True)
         if resp.status_code >= 400:
             log.warning("Gemini HTTP %s", resp.status_code)
             raise GeminiError("upstream_error", f"Gemini returned an error ({resp.status_code}).", 502, True)
@@ -256,5 +287,5 @@ class GeminiService:
             raise GeminiError("malformed_response", "Gemini's answer wasn't valid JSON.", 502, True) from e
 
         analysis = parse_gemini_payload(payload)
-        log.info("analysis ok: model=%s chars=%d signals=%d latency_ms=%d", self.config.model, len(text), len(analysis.signals), latency_ms)
-        return AnalyzeResponse(model=self.config.model, latency_ms=latency_ms, analysis=ground(analysis, text))
+        log.info("analysis ok: model=%s chars=%d signals=%d latency_ms=%d", model, len(text), len(analysis.signals), latency_ms)
+        return AnalyzeResponse(model=model, latency_ms=latency_ms, analysis=ground(analysis, text))

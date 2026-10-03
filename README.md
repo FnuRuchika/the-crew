@@ -146,7 +146,10 @@ payments. The score is computed by our own engine.
 - Key sent in the `x-goog-api-key` header (never in a URL), never logged. Submitted text is never logged or stored.
 - CORS allows only `FRONTEND_ORIGINS` (default `http://localhost:5173`, `http://127.0.0.1:5173`). In-memory rate limit: 12 requests/minute/IP.
 
-**Model:** `gemini-3.8-flash` by default (override with `GEMINI_MODEL`, e.g. `gemini-3.5-flash-lite` for lower latency).
+**Model:** `gemini-3.5-flash-lite` by default (about 2s, structured output). If it is overloaded, rate-limited or times out, the backend
+retries once on `gemini-3.1-flash-lite` (`GEMINI_FALLBACK_MODELS`). The response says which model actually answered.
+Auth and validation errors never trigger a fallback. Override the primary model with `GEMINI_MODEL`. In Oct 2026 testing, the larger
+3.6–3.8 Flash models were returning `503 UNAVAILABLE` ("high demand").
 
 ### Live scoring logic (`src/engine/liveRiskEngine.ts`)
 
