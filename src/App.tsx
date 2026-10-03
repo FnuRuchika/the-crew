@@ -5,6 +5,7 @@ import { useOperation } from './hooks/useOperation';
 import { buildMissionReport } from './mission-report/buildMissionReport';
 import { MissionReport } from './mission-report/MissionReport';
 import { LiveAnalysisScreen } from './live-analysis/LiveAnalysisScreen';
+import { LiveCallScreen } from './live-call/LiveCallScreen';
 import { LandingScreen } from './screens/LandingScreen';
 import { OperationScreen } from './screens/OperationScreen';
 import { useCaseFileVoice } from './voice/useCaseFileVoice';
@@ -13,12 +14,12 @@ import { buildCaseFileVoiceScript } from './voice/voiceScript';
 
 const caseFileVoice = buildCaseFileVoiceScript(grandparentScam);
 
-type Screen = 'landing' | 'operation' | 'report' | 'live';
+type Screen = 'landing' | 'operation' | 'report' | 'live' | 'call';
 
 /** Hash-based screen so refresh/back behave predictably without a router dependency. */
 function screenFromHash(): Screen {
   const h = window.location.hash.replace('#/', '');
-  return h === 'operation' ? 'operation' : h === 'report' ? 'report' : h === 'live' ? 'live' : 'landing';
+  return h === 'operation' ? 'operation' : h === 'report' ? 'report' : h === 'live' ? 'live' : h === 'call' ? 'call' : 'landing';
 }
 
 export default function App() {
@@ -69,7 +70,8 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <AnimatePresence mode="wait">
         <motion.div key={screen} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
-          {screen === 'landing' && <LandingScreen onBegin={begin} onTestCrew={() => setScreen('live')} />}
+          {screen === 'landing' && <LandingScreen onBegin={begin} onTestCrew={() => setScreen('live')} onLiveCall={() => setScreen('call')} />}
+          {screen === 'call' && <LiveCallScreen voice={voice} onHome={home} onCaseFile={begin} onTyped={() => setScreen('live')} />}
           {screen === 'live' && <LiveAnalysisScreen onHome={home} onCaseFile={begin} />}
           {screen === 'operation' && <OperationScreen op={op} onHome={home} onReport={() => setScreen('report')} voice={voice} voiceScript={caseFileVoice} />}
           {screen === 'report' && report && <MissionReport report={report} onReplay={replay} onHome={home} voicePowered={voice.used} />}

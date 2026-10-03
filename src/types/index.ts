@@ -76,6 +76,8 @@ export interface RiskSignal {
   detectedBy: AgentId;
   detectedAt: number;
   severity: Severity;
+  /** Overrides the catalog grouping (used by Live Call's open-ended signal types) */
+  family?: 'conversation' | 'payment' | 'identity';
 }
 
 export type RiskLevel = 'low' | 'elevated' | 'high' | 'critical';

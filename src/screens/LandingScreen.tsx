@@ -7,13 +7,13 @@ import {
   Hourglass,
   Lock,
   MessageSquareWarning,
+  Mic,
   ScanSearch,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { Brand, VaultDial } from '../components/Brand';
 import { AGENT_ICONS } from '../components/crew/agentVisuals';
-import { Button } from '../components/ui/primitives';
 import { CREW, FIELD_AGENTS } from '../data/crew';
 
 const PIPELINE: { label: string; text: string; icon: LucideIcon }[] = [
@@ -49,7 +49,38 @@ const fadeUp = {
   show: { opacity: 1, y: 0 },
 };
 
-export function LandingScreen({ onBegin, onTestCrew }: { onBegin: () => void; onTestCrew: () => void }) {
+function MissionSelector({ onBegin, onTestCrew, onLiveCall }: { onBegin: () => void; onTestCrew: () => void; onLiveCall: () => void }) {
+  const missions: { n: string; title: string; text: string; badge: string; icon: LucideIcon; onClick: () => void; primary?: boolean }[] = [
+    { n: '01', title: 'Run case file 001', text: 'Scripted cinematic demonstration', badge: 'Works offline', icon: ArrowRight, onClick: onBegin, primary: true },
+    { n: '02', title: 'Test the crew', text: 'Type a suspicious communication', badge: 'Live · Gemini', icon: ScanSearch, onClick: onTestCrew },
+    { n: '03', title: 'Live call', text: 'Analyze spoken communication', badge: 'Live · Voice + Gemini', icon: Mic, onClick: onLiveCall },
+  ];
+  return (
+    <ul className="grid w-full gap-3 sm:grid-cols-3" aria-label="Choose a mission">
+      {missions.map((m) => (
+        <li key={m.n} className="flex">
+        <button
+          onClick={m.onClick}
+          className={
+            'group flex w-full flex-col items-start rounded-xl border p-4 text-left transition-colors ' +
+            (m.primary ? 'border-gold-400/70 bg-gold-400/10 hover:bg-gold-400/20' : 'border-vault-600 bg-vault-900/70 hover:border-gold-500/60')
+          }
+        >
+          <span className="flex w-full items-center justify-between">
+            <span className="font-mono text-[11px] text-zinc-500">{m.n}</span>
+            <m.icon size={18} className="text-gold-400 transition-transform group-hover:translate-x-0.5" aria-hidden />
+          </span>
+          <span className="mt-2 font-display text-xl uppercase tracking-[0.12em] text-zinc-50">{m.title}</span>
+          <span className="mt-0.5 text-sm text-zinc-400">{m.text}</span>
+          <span className="mt-3 rounded border border-emerald-500/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-emerald-300">{m.badge}</span>
+        </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function LandingScreen({ onBegin, onTestCrew, onLiveCall }: { onBegin: () => void; onTestCrew: () => void; onLiveCall: () => void }) {
   const Mastermind = AGENT_ICONS.mastermind;
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -87,15 +118,9 @@ export function LandingScreen({ onBegin, onTestCrew }: { onBegin: () => void; on
               counter-heist team that detects social engineering <em className="not-italic text-zinc-50">while it's happening</em>,
               and steps in before the money leaves.
             </motion.p>
-            <motion.div variants={fadeUp} className="mt-9 flex flex-wrap items-center gap-4">
-              <Button size="lg" onClick={onBegin} className="font-display uppercase tracking-[0.18em]">
-                Run case file 001 <ArrowRight size={20} aria-hidden />
-              </Button>
-              <Button size="lg" variant="secondary" onClick={onTestCrew} className="font-display uppercase tracking-[0.18em]">
-                <ScanSearch size={20} aria-hidden /> Test the crew
-                <span className="rounded border border-emerald-500/50 px-1.5 py-0.5 font-mono text-[10px] tracking-widest text-emerald-300">Live · Gemini</span>
-              </Button>
-              <a href="#crew" className="op-label text-zinc-400 underline-offset-4 hover:text-zinc-200 hover:underline">
+            <motion.div variants={fadeUp} className="mt-9">
+              <MissionSelector onBegin={onBegin} onTestCrew={onTestCrew} onLiveCall={onLiveCall} />
+              <a href="#crew" className="op-label mt-4 inline-block text-zinc-400 underline-offset-4 hover:text-zinc-200 hover:underline">
                 Meet the crew ↓
               </a>
             </motion.div>
@@ -217,17 +242,9 @@ export function LandingScreen({ onBegin, onTestCrew }: { onBegin: () => void; on
           <p className="mt-3 max-w-2xl text-2xl text-zinc-200">
             Eleanor Parker, 78, is about to get a phone call about her grandson.
           </p>
-          <div className="mt-8 flex flex-wrap justify-center gap-4">
-            <Button size="lg" onClick={onBegin} className="font-display uppercase tracking-[0.18em]">
-              Run case file 001 <ArrowRight size={20} aria-hidden />
-            </Button>
-            <Button size="lg" variant="secondary" onClick={onTestCrew} className="font-display uppercase tracking-[0.18em]">
-              <ScanSearch size={20} aria-hidden /> Test the crew
-            </Button>
+          <div className="mt-8 w-full max-w-3xl">
+            <MissionSelector onBegin={onBegin} onTestCrew={onTestCrew} onLiveCall={onLiveCall} />
           </div>
-          <p className="mt-4 max-w-xl text-sm text-zinc-500">
-            Case File 001 is a scripted walkthrough. Test the Crew sends your own message to Gemini for live analysis.
-          </p>
         </section>
       </main>
     </div>

@@ -1,5 +1,5 @@
 /**
- * Pre-generate every Case File 001 voice clip into the backend's disk cache
+ * Pre-generate every Case File 001 and Live Call voice clip into the backend's disk cache
  * (backend/.voice-cache), so the judged demo plays instantly and uses no live quota.
  *
  *   Terminal 1: cd backend && .venv/bin/uvicorn main:app --port 8000
@@ -9,6 +9,7 @@
  * The ElevenLabs key never leaves the backend; this script only talks to /api/voice.
  */
 import { grandparentScam } from '../src/data/scenarios/grandparentScam';
+import { LIVE_CALL_CLIPS } from '../src/live-call/liveCallScript';
 import { buildCaseFileVoiceScript } from '../src/voice/voiceScript';
 
 const API = process.env.CREW_API ?? 'http://127.0.0.1:8000';
@@ -21,7 +22,8 @@ async function main() {
   }
   console.log(`Voice backend ok · model ${status.model} · key configured: ${status.configured}\n`);
 
-  const { clips } = buildCaseFileVoiceScript(grandparentScam);
+  // Case File 001 lines + Live Call demo audio and guardian line.
+  const clips = [...buildCaseFileVoiceScript(grandparentScam).clips, ...LIVE_CALL_CLIPS];
   let failed = 0;
   let generated = 0;
   for (const clip of clips) {

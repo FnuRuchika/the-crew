@@ -23,7 +23,7 @@ const FAMILY_TITLE = {
 
 export function EvidenceList({ signals, large = true }: { signals: RiskSignal[]; large?: boolean }) {
   const families = (['conversation', 'payment', 'identity'] as const)
-    .map((f) => ({ f, items: signals.filter((s) => SIGNAL_CATALOG[s.category].family === f) }))
+    .map((f) => ({ f, items: signals.filter((s) => (s.family ?? SIGNAL_CATALOG[s.category]?.family ?? 'conversation') === f) }))
     .filter((g) => g.items.length);
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -63,17 +63,25 @@ export function InterventionPanel({
   busy,
   onReadAloud,
   speaking = false,
+  lead,
+  reassurance = "You haven't done anything wrong. These tactics are designed to fool caring people. Your money is safe while you check.",
+  kicker = 'The Fixer · Payment on hold',
 }: {
   intervention: Intervention;
-  payment: Payment;
-  targetName: string;
+  /** Optional: Live Call has no pending payment */
+  payment?: Payment;
+  targetName?: string;
+  /** Replaces the opening sentence (defaults to "<name>, we've paused this $X payment.") */
+  lead?: string;
+  reassurance?: string;
+  kicker?: string;
   onChoose: (id: InterventionActionId) => void;
   busy: boolean;
   /** ElevenLabs guardian voice; resolves false if unavailable so we fall back to the browser voice */
   onReadAloud?: () => Promise<boolean>;
   speaking?: boolean;
 }) {
-  const first = targetName.split(' ')[0];
+  const first = targetName?.split(' ')[0] ?? '';
   const recommended = intervention.actions.find((a) => a.recommended);
   const others = intervention.actions.filter((a) => !a.recommended);
   const primaryRef = useRef<HTMLButtonElement>(null);
@@ -86,7 +94,7 @@ export function InterventionPanel({
     if (onReadAloud && (await onReadAloud())) return;
     const reasons = intervention.reasons.map((r) => r.label).join('. ');
     services.voice.speak(
-      `${first}, we've paused this payment. ${intervention.message} ${reasons}. You haven't done anything wrong. ` +
+      `${lead ?? `${first}, we've paused this payment.`} ${intervention.message} ${reasons}. You haven't done anything wrong. ` +
         (recommended ? `The safest next step is to ${recommended.label.replace('—', ',')}.` : ''),
     );
   };
@@ -97,7 +105,7 @@ export function InterventionPanel({
       <div className="p-6 sm:px-9 sm:py-7">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="op-label flex items-center gap-2 text-gold-300">
-            <Wrench size={14} aria-hidden /> The Fixer · Payment on hold
+            <Wrench size={14} aria-hidden /> {kicker}
           </p>
           <span className="rounded border border-red-500/60 bg-red-500/10 px-2.5 py-1 font-mono text-xs font-bold uppercase tracking-widest text-red-300">
             Risk {intervention.riskScore}% · Critical
@@ -118,12 +126,10 @@ export function InterventionPanel({
 
         <div id="heist-desc" className="mt-5 space-y-2">
           <p className="text-2xl leading-snug text-zinc-50">
-            {first}, we've paused this {formatMoney(payment.amount)} payment.{' '}
+            {lead ?? `${first}, we've paused this ${payment ? formatMoney(payment.amount) + ' ' : ''}payment.`}{' '}
             <span className="text-gold-200">{intervention.message}</span>
           </p>
-          <p className="text-lg text-zinc-300">
-            You haven't done anything wrong. These tactics are designed to fool caring people. Your money is safe while you check.
-          </p>
+          <p className="text-lg text-zinc-300">{reassurance}</p>
         </div>
 
         <div className="mt-6 flex items-center justify-between">
@@ -163,7 +169,10 @@ export function InterventionPanel({
               disabled={busy}
               className="w-full justify-start text-left"
             >
-              <HeartHandshake size={30} className="shrink-0" aria-hidden />
+              {(() => {
+                const RecIcon = ACTION_ICON[recommended.id];
+                return <RecIcon size={30} className="shrink-0" aria-hidden />;
+              })()}
               <span className="flex flex-col">
                 <span className="font-display text-2xl uppercase tracking-wider">{recommended.label}</span>
                 <span className="text-base font-medium text-vault-950/80">{recommended.description}</span>

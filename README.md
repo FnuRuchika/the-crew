@@ -51,7 +51,8 @@ is enough for a demo. `backend/.env` is git-ignored.
 | `npm run typecheck` | TypeScript only |
 | `npm run test:risk` | Deterministic risk-engine checks (no network) |
 | `npm run smoke:live` | Sends the 3 reference messages to the running backend (needs key) |
-| `npm run prewarm:voice` | Generates and caches all Case File 001 voice clips (needs backend + `ELEVENLABS_API_KEY`) |
+| `npm run prewarm:voice` | Generates and caches all Case File 001 + Live Call demo voice clips (needs backend + `ELEVENLABS_API_KEY`) |
+| `npm run test:live` | Live Call session logic checks (no network) |
 | `cd backend && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest` | Backend tests (mocked Gemini, no key needed) |
 
 ## Demo script (≈ 2 minutes)
@@ -204,6 +205,36 @@ per line, keyed by a hash of role + text + voice + settings + model. Re-running 
 
 `backend/.voice-cache/` is **git-ignored**: generated audio isn't committed (licensing and repo size). Regenerate it on
 any machine with `npm run prewarm:voice`. Changing a line's text, voice or model automatically creates a new cache entry.
+
+## Live Call: spoken analysis (Phase 4)
+
+**Mission Control → LIVE CALL.** Press **Start listening**, let the caller speak (phone on speaker), then press
+**Stop & analyze**. Each 1–30s segment goes:
+
+```
+Microphone (MediaRecorder) → POST /api/transcribe → ElevenLabs Speech-to-Text (scribe_v2)
+  → transcript appended to the session → POST /api/analyze (Gemini, whole conversation so far)
+  → deterministic live risk engine → Mastermind deploys only the agents the evidence calls for
+  → existing intervention design when risk reaches CRITICAL (≥ 80)
+```
+
+- **Session, not one-offs.** Every segment is re-assessed in context. Evidence is merged across segments
+  (same tactic + same phrase = one entry, strongest confidence kept) and scored with the same engine as
+  TEST THE CREW (strongest signal per tactic, noisy-OR, capped below 100%), so repetition can't inflate risk.
+- **Crew:** GRIFTER for manipulation language · LOOKOUT for payment or account-access requests · INSIDE MAN when
+  the caller claims an identity (bank, police, relative) · SAFECRACKER once 2+ tactics corroborate · FIXER at
+  critical risk · GETAWAY DRIVER once the person picks a safe option.
+- **LOAD DEMO AUDIO** (judging fallback): three pre-recorded caller segments (ElevenLabs TTS, cached by
+  `npm run prewarm:voice`) are sent through the **same** `/api/transcribe` → Gemini pipeline. Nothing about the
+  transcript is hard-coded.
+- **Privacy:** the microphone starts only on click and is released on Stop. The backend handles audio in
+  memory only: it is never written to disk or logged, and transcripts aren't logged. Audio is processed by
+  ElevenLabs (STT) and the text by Gemini.
+- **Failures:** mic blocked → clear message + retry + demo audio · STT failure → no fake transcript, Retry/Discard ·
+  Gemini failure → transcript kept, "Analysis temporarily unavailable", Retry analysis. The session is never lost.
+- `/api/transcribe` limits: 1 KB–10 MB, webm/ogg/mp4/m4a/mp3/wav/aac (declared type **and** file signature
+  checked), 20 per minute per IP, 20s upstream timeout, fallback to `scribe_v1`.
+- `npm run test:live` checks session windowing, evidence de-duplication and selective crew deployment.
 
 ## Integration map (future phases)
 

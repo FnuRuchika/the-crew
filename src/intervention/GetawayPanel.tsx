@@ -12,8 +12,9 @@ export function GetawayPanel({
   busy,
 }: {
   steps: ExitStep[];
-  payment: Payment;
-  accountLabel: string;
+  /** Optional: Live Call has no payment to stop */
+  payment?: Payment;
+  accountLabel?: string;
   onComplete: () => void;
   busy: boolean;
 }) {
@@ -26,9 +27,11 @@ export function GetawayPanel({
       >
         <ShieldCheck size={40} className="text-emerald-400" aria-hidden />
         <div>
-          <p className="font-display text-3xl uppercase tracking-wider text-emerald-300">Payment stopped</p>
+          <p className="font-display text-3xl uppercase tracking-wider text-emerald-300">{payment ? 'Payment stopped' : "You're in control"}</p>
           <p className="text-lg text-zinc-200">
-            {formatMoney(payment.amount)} stays in {accountLabel}. Nothing was sent to {payment.recipient.name}.
+            {payment
+              ? `${formatMoney(payment.amount)} stays in ${accountLabel}. Nothing was sent to ${payment.recipient.name}.`
+              : 'Nothing has been sent. Take your time: the safe steps are below.'}
           </p>
         </div>
       </motion.div>

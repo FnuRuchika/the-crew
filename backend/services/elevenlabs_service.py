@@ -26,6 +26,8 @@ API_ROOT = "https://api.elevenlabs.io/v1"
 DEFAULT_MODEL = "eleven_v4"
 DEFAULT_FALLBACK_MODELS = ("eleven_multilingual_v2",)
 OUTPUT_FORMAT = "mp3_44100_128"
+DEFAULT_STT_MODEL = "scribe_v2"  # verified Oct 2026 with a real request; scribe_v1 is deprecated
+DEFAULT_STT_FALLBACK_MODELS = ("scribe_v1",)
 MAX_TEXT_CHARS = 400
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / ".voice-cache"
 
@@ -77,10 +79,16 @@ class VoiceConfig:
     fallback_models: tuple[str, ...] = DEFAULT_FALLBACK_MODELS
     timeout_seconds: float = 20
     cache_dir: Path = field(default=DEFAULT_CACHE_DIR)
+    stt_model: str = DEFAULT_STT_MODEL
+    stt_fallback_models: tuple[str, ...] = DEFAULT_STT_FALLBACK_MODELS
 
     @property
     def models(self) -> tuple[str, ...]:
         return (self.model, *(m for m in self.fallback_models if m != self.model))
+
+    @property
+    def stt_models(self) -> tuple[str, ...]:
+        return (self.stt_model, *(m for m in self.stt_fallback_models if m != self.stt_model))
 
     @classmethod
     def from_env(cls) -> "VoiceConfig":
@@ -91,6 +99,7 @@ class VoiceConfig:
             fallback_models=tuple(m.strip() for m in raw_fb.split(",") if m.strip()) if raw_fb is not None else DEFAULT_FALLBACK_MODELS,
             timeout_seconds=float(os.getenv("ELEVENLABS_TIMEOUT_SECONDS") or 20),
             cache_dir=Path(os.getenv("VOICE_CACHE_DIR") or DEFAULT_CACHE_DIR),
+            stt_model=(os.getenv("ELEVENLABS_STT_MODEL") or DEFAULT_STT_MODEL).strip(),
         )
 
 
@@ -119,6 +128,14 @@ def normalise_text(text: str) -> str:
     if len(cleaned) > MAX_TEXT_CHARS:
         raise VoiceError("invalid_input", f"Text must be at most {MAX_TEXT_CHARS} characters.", 422, False)
     return cleaned
+
+
+@dataclass(frozen=True)
+class TranscriptResult:
+    text: str
+    language_code: str | None
+    model: str
+    latency_ms: int
 
 
 class ElevenLabsService:
@@ -196,21 +213,77 @@ class ElevenLabsService:
         if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("audio/") and resp.content:
             log.debug("voice upstream ok in %dms", int((time.perf_counter() - started) * 1000))
             return resp.content
-        status = _detail_status(resp)
-        if resp.status_code == 429:
-            raise VoiceError("rate_limited", "ElevenLabs rate limit reached. Retry shortly.", 429, True)
-        if status == "quota_exceeded":
-            raise VoiceError("quota_exceeded", "ElevenLabs character quota is used up.", 502, False)
-        if resp.status_code in (401, 403):
-            raise VoiceError("auth_failed", "ElevenLabs rejected the server's API key.", 502, False)
-        if resp.status_code == 402 or status in {"voice_not_found", "payment_required"}:
-            raise VoiceError("voice_unavailable_on_plan", "This voice isn't available on the current ElevenLabs plan.", 502, False)
-        if resp.status_code in (400, 404, 422) and "model" in (status or ""):
-            raise VoiceError("model_unavailable", f"Model '{model}' isn't available.", 502, False)
-        if resp.status_code in (500, 502, 503):
-            raise VoiceError("voice_unavailable", "ElevenLabs is temporarily unavailable.", 503, True)
-        log.warning("ElevenLabs HTTP %s (%s)", resp.status_code, status)
-        raise VoiceError("upstream_error", f"ElevenLabs returned an error ({resp.status_code}).", 502, True)
+        raise _map_error(resp, model)
+
+    # ─────────── Speech-to-text (Live Call) ───────────
+
+    async def transcribe(self, audio: bytes, content_type: str) -> TranscriptResult:
+        """Transcribe an in-memory clip. The audio is never written to disk by THE CREW."""
+        if not self.config.api_key:
+            raise VoiceError("not_configured", "Transcription is offline: ELEVENLABS_API_KEY is not set on the server.", 503, False)
+        last: VoiceError | None = None
+        for model in self.config.stt_models:
+            try:
+                return await self._transcribe_with(model, audio, content_type)
+            except VoiceError as e:
+                last = e
+                if e.code not in FALLBACK_CODES:
+                    raise
+                log.warning("stt model %s failed (%s); trying next model if any", model, e.code)
+        assert last is not None
+        raise last
+
+    async def _transcribe_with(self, model: str, audio: bytes, content_type: str) -> TranscriptResult:
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout_seconds, transport=self._transport) as client:
+                resp = await client.post(
+                    f"{API_ROOT}/speech-to-text",
+                    headers={"xi-api-key": self.config.api_key},
+                    data={"model_id": model, "tag_audio_events": "false"},
+                    files={"file": ("segment" + _extension(content_type), audio, content_type)},
+                )
+        except httpx.TimeoutException as e:
+            raise VoiceError("timeout", "Transcription took too long.", 504, True) from e
+        except httpx.HTTPError as e:
+            raise VoiceError("upstream_unreachable", "Couldn't reach ElevenLabs.", 502, True) from e
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if resp.status_code != 200:
+            raise _map_error(resp, model)
+        try:
+            body = resp.json()
+            text = " ".join(str(body.get("text") or "").split())
+        except (ValueError, AttributeError) as e:
+            raise VoiceError("malformed_response", "ElevenLabs returned an unreadable transcript.", 502, True) from e
+        if not text:
+            raise VoiceError("no_speech", "No speech was detected in this recording.", 422, False)
+        # Log sizes only: transcripts are conversation content and are never logged.
+        log.info("transcribed: model=%s bytes=%d chars=%d latency_ms=%d", model, len(audio), len(text), latency_ms)
+        return TranscriptResult(text=text, language_code=body.get("language_code"), model=model, latency_ms=latency_ms)
+
+
+def _extension(content_type: str) -> str:
+    return {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/aac": ".aac"}.get(content_type, "")
+
+
+def _map_error(resp: httpx.Response, model: str) -> VoiceError:
+    status = _detail_status(resp)
+    if resp.status_code == 429:
+        return VoiceError("rate_limited", "ElevenLabs rate limit reached. Retry shortly.", 429, True)
+    if status == "quota_exceeded":
+        return VoiceError("quota_exceeded", "ElevenLabs character quota is used up.", 502, False)
+    if resp.status_code in (401, 403):
+        return VoiceError("auth_failed", "ElevenLabs rejected the server's API key.", 502, False)
+    if resp.status_code == 402 or status in {"voice_not_found", "payment_required"}:
+        return VoiceError("voice_unavailable_on_plan", "This voice or feature isn't available on the current ElevenLabs plan.", 502, False)
+    if resp.status_code in (400, 404, 422) and "model" in (status or ""):
+        return VoiceError("model_unavailable", f"Model '{model}' isn't available.", 502, False)
+    if resp.status_code in (500, 502, 503):
+        return VoiceError("voice_unavailable", "ElevenLabs is temporarily unavailable.", 503, True)
+    if resp.status_code in (400, 422):
+        return VoiceError("unsupported_audio", "ElevenLabs couldn't process this audio.", 422, False)
+    log.warning("ElevenLabs HTTP %s (%s)", resp.status_code, status)
+    return VoiceError("upstream_error", f"ElevenLabs returned an error ({resp.status_code}).", 502, True)
 
 
 def _detail_status(resp: httpx.Response) -> str | None:
