@@ -44,7 +44,13 @@ export interface OperationController {
   reset: () => void;
 }
 
-export function useOperation(scenario: Scenario): OperationController {
+export interface OperationOptions {
+  /** Pause auto-play while something (e.g. a voice line) is still playing. */
+  holdAutoPlay?: boolean;
+}
+
+export function useOperation(scenario: Scenario, options: OperationOptions = {}): OperationController {
+  const { holdAutoPlay = false } = options;
   const { crew, events, voice } = services;
   const [state, setState] = useState(() => createInitialState(scenario));
   const ref = useRef(state);
@@ -410,12 +416,12 @@ export function useOperation(scenario: Scenario): OperationController {
 
   // Auto-play: advance whenever possible, with phase-appropriate pauses.
   useEffect(() => {
-    if (!autoPlay || !canAdvance) return;
+    if (!autoPlay || !canAdvance || holdAutoPlay) return;
     const delay = AUTO_DELAY[phase];
     if (delay === undefined) return;
     const t = setTimeout(next, delay);
     return () => clearTimeout(t);
-  }, [autoPlay, canAdvance, phase, next]);
+  }, [autoPlay, canAdvance, phase, next, holdAutoPlay]);
 
   // Mirror the mission log into the event store (Tiger Data later).
   const persisted = useRef(0);

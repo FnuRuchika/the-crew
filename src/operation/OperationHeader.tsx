@@ -1,5 +1,7 @@
 import { ChevronRight, Home, Pause, Play, RotateCcw } from 'lucide-react';
 import { Brand } from '../components/Brand';
+import type { VoiceController } from '../voice/useVoice';
+import { VoiceToggle } from '../voice/VoiceToggle';
 import { Button, Kbd, LiveDot } from '../components/ui/primitives';
 import { cx } from '../lib/format';
 import type { OperationController } from '../hooks/useOperation';
@@ -22,11 +24,13 @@ export function OperationHeader({
   caseNumber,
   onHome,
   onNext,
+  voice,
 }: {
   op: OperationController;
   caseNumber: string;
   onHome: () => void;
   onNext: () => void;
+  voice?: VoiceController;
 }) {
   const status = PHASE_STATUS[op.state.phase];
   const done = op.state.phase === 'protected';
@@ -51,6 +55,7 @@ export function OperationHeader({
           <Button variant="ghost" size="sm" onClick={onHome} className="hidden sm:inline-flex" aria-label="Mission control">
             <Home size={15} aria-hidden />
           </Button>
+          {voice && <VoiceToggle voice={voice} />}
           <Button variant="secondary" size="sm" onClick={op.reset} aria-label="Reset operation">
             <RotateCcw size={15} aria-hidden /> <span className="hidden sm:inline">Reset</span>
           </Button>

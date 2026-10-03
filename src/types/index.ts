@@ -198,8 +198,13 @@ export interface VerificationLine {
   text: string;
 }
 
+/** Server-side voice roles (backend/services/elevenlabs_service.py: VoiceRole). */
+export type VoiceRole = 'caller' | 'guardian' | 'family_female' | 'family_male';
+
 export interface VerificationScript {
   contactId: string;
+  /** Voice used for this contact's lines in voice mode */
+  voiceRole?: VoiceRole;
   lines: VerificationLine[];
   /** Mission-log summary once verification completes */
   finding: string;

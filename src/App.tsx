@@ -7,6 +7,11 @@ import { MissionReport } from './mission-report/MissionReport';
 import { LiveAnalysisScreen } from './live-analysis/LiveAnalysisScreen';
 import { LandingScreen } from './screens/LandingScreen';
 import { OperationScreen } from './screens/OperationScreen';
+import { useCaseFileVoice } from './voice/useCaseFileVoice';
+import { useVoice } from './voice/useVoice';
+import { buildCaseFileVoiceScript } from './voice/voiceScript';
+
+const caseFileVoice = buildCaseFileVoiceScript(grandparentScam);
 
 type Screen = 'landing' | 'operation' | 'report' | 'live';
 
@@ -17,7 +22,9 @@ function screenFromHash(): Screen {
 }
 
 export default function App() {
-  const op = useOperation(grandparentScam);
+  const voice = useVoice();
+  // Auto-play waits for the current line to finish so speech is never cut off mid-sentence.
+  const op = useOperation(grandparentScam, { holdAutoPlay: voice.speaking });
   const [screen, setScreenState] = useState<Screen>(() => {
     const s = screenFromHash();
     // A report needs a finished operation; fall back on refresh.
@@ -40,6 +47,8 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, [op.state.phase]);
 
+  useCaseFileVoice(op.state, voice, caseFileVoice, screen === 'operation');
+
   const report = useMemo(() => (screen === 'report' ? buildMissionReport(op.state) : null), [screen, op.state]);
 
   const begin = () => {
@@ -52,6 +61,7 @@ export default function App() {
   };
   const home = () => {
     op.setAutoPlay(false);
+    voice.stop();
     setScreen('landing');
   };
 
@@ -61,8 +71,8 @@ export default function App() {
         <motion.div key={screen} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
           {screen === 'landing' && <LandingScreen onBegin={begin} onTestCrew={() => setScreen('live')} />}
           {screen === 'live' && <LiveAnalysisScreen onHome={home} onCaseFile={begin} />}
-          {screen === 'operation' && <OperationScreen op={op} onHome={home} onReport={() => setScreen('report')} />}
-          {screen === 'report' && report && <MissionReport report={report} onReplay={replay} onHome={home} />}
+          {screen === 'operation' && <OperationScreen op={op} onHome={home} onReport={() => setScreen('report')} voice={voice} voiceScript={caseFileVoice} />}
+          {screen === 'report' && report && <MissionReport report={report} onReplay={replay} onHome={home} voicePowered={voice.used} />}
         </motion.div>
       </AnimatePresence>
     </MotionConfig>

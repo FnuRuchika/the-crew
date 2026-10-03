@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { PhoneCall, PhoneIncoming, Play, TriangleAlert } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Button, LiveDot, Panel } from '../components/ui/primitives';
+import { SpeakingBars } from '../voice/VoiceToggle';
 import { cx, formatClock } from '../lib/format';
 import type { ConversationEvent, OperationPhase, RiskSignal } from '../types';
 
@@ -40,6 +41,7 @@ export function ConversationFeed({
   onStart,
   canStart,
   compact,
+  speakingMessageId,
 }: {
   messages: ConversationEvent[];
   signals: RiskSignal[];
@@ -50,6 +52,8 @@ export function ConversationFeed({
   onStart: () => void;
   canStart: boolean;
   compact?: boolean;
+  /** Caller line currently being voiced (voice mode) */
+  speakingMessageId?: string | null;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -119,6 +123,11 @@ export function ConversationFeed({
                   >
                     <span className="op-label text-[10px]">
                       {isCaller ? `Caller · ${callerNumber}` : firstName} · {formatClock(m.at)}
+                      {speakingMessageId === m.id && (
+                        <span className="ml-2 inline-flex items-center gap-1 text-gold-300" data-speaking="true">
+                          <SpeakingBars /> speaking
+                        </span>
+                      )}
                     </span>
                     <p
                       className={cx(

@@ -51,6 +51,7 @@ is enough for a demo. `backend/.env` is git-ignored.
 | `npm run typecheck` | TypeScript only |
 | `npm run test:risk` | Deterministic risk-engine checks (no network) |
 | `npm run smoke:live` | Sends the 3 reference messages to the running backend (needs key) |
+| `npm run prewarm:voice` | Generates and caches all Case File 001 voice clips (needs backend + `ELEVENLABS_API_KEY`) |
 | `cd backend && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest` | Backend tests (mocked Gemini, no key needed) |
 
 ## Demo script (≈ 2 minutes)
@@ -165,13 +166,52 @@ Auth and validation errors never trigger a fallback. Override the primary model 
 Identical Gemini output always gives an identical score (`npm run test:risk` verifies this, along with
 order-independence, the 100% cap, and that Case File 001's 14 → 94 progression is unchanged).
 
+## Voice: ElevenLabs (Phase 3)
+
+Case File 001 can be **heard**: the scam caller's lines are spoken as they appear, the intervention is spoken by a calm
+guardian voice, and Sarah (or Daniel) answers the trusted verification call. The transcript, risk engine, crew and demo
+controls are unchanged. Voice only *observes* the scripted operation (`src/voice/useCaseFileVoice.ts`), so **text-only is
+always a complete fallback**.
+
+| Role | Used for | Voice (ElevenLabs premade) |
+|---|---|---|
+| `caller` | Scam caller lines | Eric, smooth and plausible |
+| `guardian` | "THE HEIST IS IN PROGRESS" + "Read this to me" | Matilda, warm and calm (slower, low style) |
+| `family_female` | Sarah's verification lines | Jessica |
+| `family_male` | Daniel's verification lines | Liam |
+
+No cloned or real-person voices. Model: **`eleven_v4`**, with automatic fallback to `eleven_multilingual_v2`.
+
+**Controls:** **Voice on/off** in the demo controls (remembered per browser). Auto play waits for each spoken line to finish.
+If voice fails for any reason (no key, quota, outage, backend down), a subtle *Voice unavailable* label appears and the
+demo continues as text. "Read this to me" falls back to the browser's built-in voice.
+
+**Security:** the browser calls `POST /api/voice/speak {role, text}` on our backend; only the backend holds
+`ELEVENLABS_API_KEY` (sent as the `xi-api-key` header, never logged). Roles are a fixed list, text is capped at 400
+characters, and new generations are rate-limited to 30 per minute per IP (cached clips are free).
+
+### Caching & prewarm (do this before judging)
+
+```bash
+# backend running (see Quick start), then:
+npm run prewarm:voice
+```
+
+This generates all 13 Case File clips (about 910 characters, a one-time cost) into **`backend/.voice-cache/`**: one MP3
+per line, keyed by a hash of role + text + voice + settings + model. Re-running costs nothing. During the demo:
+- the backend serves clips straight from disk, **even if ElevenLabs is down or the key is removed**;
+- the browser prefetches every clip when Case File 001 opens and keeps them in memory, so lines play instantly and Replay makes no new requests.
+
+`backend/.voice-cache/` is **git-ignored**: generated audio isn't committed (licensing and repo size). Regenerate it on
+any machine with `npm run prewarm:voice`. Changing a line's text, voice or model automatically creates a new cache entry.
+
 ## Integration map (future phases)
 
 | Integration | Where it connects | Notes |
 |---|---|---|
 | **FastAPI backend** | ✅ `backend/` (Phase 2). Later: `src/services/index.ts` → `crew: createRemoteCrew(...)` implementing `Crew` | All keys live server-side. The browser never sees them. |
 | **Google Gemini** | ✅ Phase 2: **Grifter** in *Test the Crew* (`backend/services/gemini_service.py`). Next: Mastermind (`Mastermind.plan` / `classifyThreat`), and the Grifter inside Case File 001 via `ConversationAnalyst.analyze` | Structured output. The deterministic engine keeps the safety decision. |
-| **ElevenLabs** | `VoiceService` in `src/services/contracts.ts` (Phase 1: browser SpeechSynthesis via "Read this to me") | Calm spoken intervention. Later, live call audio → transcript → Grifter. |
+| **ElevenLabs** | ✅ Phase 3: `backend/services/elevenlabs_service.py` + `src/voice/` | Caller, guardian and family voices for Case File 001. Later: live call audio → transcript → Grifter. |
 | **Tiger Data / PostgreSQL** | `MissionEventStore` (Phase 1: in-memory, already receives every `MissionEvent`) | Hypertable of timestamped mission / risk / intervention events. Lookout payee history can come from here too. |
 | **Presage** | `PhysiologicalContextProvider` (Phase 1: disabled) | Opt-in only. At most **one weak signal** in the risk engine, never proof of a scam. |
 | **Vultr** | Deploy the FastAPI service + `npm run build` static output | |

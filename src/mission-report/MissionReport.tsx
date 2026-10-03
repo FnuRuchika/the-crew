@@ -24,7 +24,18 @@ const LESSONS = [
   },
 ];
 
-export function MissionReport({ report, onReplay, onHome }: { report: MissionReportData; onReplay: () => void; onHome: () => void }) {
+export function MissionReport({
+  report,
+  onReplay,
+  onHome,
+  voicePowered = false,
+}: {
+  report: MissionReportData;
+  onReplay: () => void;
+  onHome: () => void;
+  /** ElevenLabs voice actually played during this session */
+  voicePowered?: boolean;
+}) {
   const summary = [
     { label: 'Amount protected', value: formatMoney(report.amountProtected), tone: 'text-emerald-300' },
     { label: 'Peak risk', value: `${report.peakRisk}%`, tone: 'text-red-300' },
@@ -182,6 +193,10 @@ export function MissionReport({ report, onReplay, onHome }: { report: MissionRep
             <EventTimeline events={report.timeline} />
           </div>
         </Panel>
+
+        {voicePowered && (
+          <p className="mt-8 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-600">Voice intelligence powered by ElevenLabs</p>
+        )}
 
         <div className="mt-10 flex flex-wrap justify-center gap-3">
           <Button size="lg" onClick={onReplay}>

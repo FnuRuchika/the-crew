@@ -121,6 +121,7 @@ export const grandparentScam: Scenario = {
   verifications: [
     {
       contactId: 'sarah',
+      voiceRole: 'family_female',
       lines: [
         { speaker: 'contact', text: 'Mom? Is everything okay?' },
         { speaker: 'target', text: 'Someone called. They said Daniel was arrested and needs $2,500 for bail.' },
@@ -131,6 +132,7 @@ export const grandparentScam: Scenario = {
     },
     {
       contactId: 'daniel',
+      voiceRole: 'family_male',
       lines: [
         { speaker: 'contact', text: "Grandma? Hi! What's up?" },
         { speaker: 'target', text: "Daniel! Someone said you'd been arrested. Are you alright?" },

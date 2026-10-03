@@ -23,6 +23,8 @@ pnpm-debug.log*
 *.log
 
 # ── Python backend ────────────────────────────────────
+# Generated ElevenLabs audio: regenerate with `npm run prewarm:voice`; never committed.
+.voice-cache/
 .venv/
 venv/
 __pycache__/

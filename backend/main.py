@@ -15,11 +15,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict
 
 load_dotenv(Path(__file__).parent / ".env")
 
 from models.analysis import MAX_INPUT_CHARS, AnalyzeRequest, AnalyzeResponse, ErrorResponse  # noqa: E402
+from services.elevenlabs_service import MAX_TEXT_CHARS, ElevenLabsService, VoiceConfig, VoiceError, VoiceRole  # noqa: E402
 from services.gemini_service import GeminiConfig, GeminiError, GeminiService  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -37,9 +39,11 @@ app.add_middleware(
     allow_origins=ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
+    expose_headers=["X-Voice-Cache"],
 )
 
 app.state.gemini = GeminiService(GeminiConfig.from_env())
+app.state.voice = ElevenLabsService(VoiceConfig.from_env())
 
 
 def error(status: int, code: str, message: str, retryable: bool) -> JSONResponse:
@@ -51,15 +55,19 @@ def error(status: int, code: str, message: str, retryable: bool) -> JSONResponse
 
 # Tiny in-memory rate limit per client IP: protects the demo key from accidental floods.
 RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE") or 12)
+VOICE_RATE_LIMIT = int(os.getenv("VOICE_RATE_LIMIT_PER_MINUTE") or 30)  # uncached generations only
 _hits: dict[str, deque[float]] = defaultdict(deque)
+_voice_hits: dict[str, deque[float]] = defaultdict(deque)
 
 
-def rate_limited(ip: str) -> bool:
+def rate_limited(ip: str, bucket: dict[str, deque[float]] | None = None, limit: int | None = None) -> bool:
+    bucket = _hits if bucket is None else bucket
+    limit = RATE_LIMIT if limit is None else limit
     now = time.monotonic()
-    q = _hits[ip]
+    q = bucket[ip]
     while q and now - q[0] > 60:
         q.popleft()
-    if len(q) >= RATE_LIMIT:
+    if len(q) >= limit:
         return True
     q.append(now)
     return False
@@ -100,3 +108,38 @@ async def analyze(body: AnalyzeRequest, request: Request):
     except GeminiError as e:
         log.warning("analysis failed: %s", e.code)
         return error(e.status, e.code, e.message, e.retryable)
+
+
+# ─────────── Voice (ElevenLabs) ───────────
+
+
+class SpeakRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: VoiceRole
+    text: str
+
+
+@app.get("/api/voice/status")
+async def voice_status() -> dict:
+    svc: ElevenLabsService = app.state.voice
+    return {"configured": svc.configured, "model": svc.config.model, "max_text_chars": MAX_TEXT_CHARS}
+
+
+@app.post("/api/voice/speak", responses={200: {"content": {"audio/mpeg": {}}}, 422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
+async def voice_speak(body: SpeakRequest, request: Request):
+    svc: ElevenLabsService = app.state.voice
+    ip = request.client.host if request.client else "unknown"
+    try:
+        # Cached clips are free; only fresh generations count toward the rate limit.
+        if not svc.cached(body.role, body.text) and rate_limited(ip, _voice_hits, VOICE_RATE_LIMIT):
+            return error(429, "rate_limited", "Too many new voice clips in a minute. Please wait a moment.", True)
+        result = await svc.speak(body.role, body.text)
+    except VoiceError as e:
+        log.warning("voice failed: %s", e.code)
+        return error(e.status, e.code, e.message, e.retryable)
+    return Response(
+        content=result.audio,
+        media_type="audio/mpeg",
+        headers={"X-Voice-Cache": "hit" if result.cache_hit else "miss", "Cache-Control": "private, max-age=86400"},
+    )

@@ -5,6 +5,7 @@ import { Button } from '../components/ui/primitives';
 import { SIGNAL_CATALOG } from '../data/signalCatalog';
 import { cx, formatMoney } from '../lib/format';
 import { services } from '../services';
+import { SpeakingBars } from '../voice/VoiceToggle';
 import type { Intervention, InterventionActionId, Payment, RiskSignal } from '../types';
 
 const ACTION_ICON: Record<InterventionActionId, LucideIcon> = {
@@ -60,12 +61,17 @@ export function InterventionPanel({
   targetName,
   onChoose,
   busy,
+  onReadAloud,
+  speaking = false,
 }: {
   intervention: Intervention;
   payment: Payment;
   targetName: string;
   onChoose: (id: InterventionActionId) => void;
   busy: boolean;
+  /** ElevenLabs guardian voice; resolves false if unavailable so we fall back to the browser voice */
+  onReadAloud?: () => Promise<boolean>;
+  speaking?: boolean;
 }) {
   const first = targetName.split(' ')[0];
   const recommended = intervention.actions.find((a) => a.recommended);
@@ -76,7 +82,8 @@ export function InterventionPanel({
     primaryRef.current?.focus({ preventScroll: true });
   }, []);
 
-  const readAloud = () => {
+  const readAloud = async () => {
+    if (onReadAloud && (await onReadAloud())) return;
     const reasons = intervention.reasons.map((r) => r.label).join('. ');
     services.voice.speak(
       `${first}, we've paused this payment. ${intervention.message} ${reasons}. You haven't done anything wrong. ` +
@@ -121,9 +128,9 @@ export function InterventionPanel({
 
         <div className="mt-6 flex items-center justify-between">
           <h3 className="font-display text-xl uppercase tracking-wider text-zinc-200">What we noticed</h3>
-          {services.voice.available && (
-            <Button variant="ghost" size="sm" onClick={readAloud}>
-              <Volume2 size={16} aria-hidden /> Read this to me
+          {(onReadAloud || services.voice.available) && (
+            <Button variant="ghost" size="sm" onClick={() => void readAloud()}>
+              {speaking ? <SpeakingBars className="text-gold-300" /> : <Volume2 size={16} aria-hidden />} Read this to me
             </Button>
           )}
         </div>

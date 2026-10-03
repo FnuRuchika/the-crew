@@ -11,7 +11,17 @@ import { VerificationPanel } from './VerificationPanel';
  * Full-screen layer for everything after the Fixer steps in. Deliberately simpler than
  * the command centre behind it: one message, one decision at a time, large text.
  */
-export function InterventionLayer({ op, onReport }: { op: OperationController; onReport: () => void }) {
+export function InterventionLayer({
+  op,
+  onReport,
+  onReadAloud,
+  guardianSpeaking,
+}: {
+  op: OperationController;
+  onReport: () => void;
+  onReadAloud?: () => Promise<boolean>;
+  guardianSpeaking?: boolean;
+}) {
   const { state, busy } = op;
   const { phase, intervention, payment, verification } = state;
   const open = ['intervention', 'verifying', 'cooldown', 'exit', 'protected'].includes(phase) && intervention !== null && payment !== null;
@@ -40,7 +50,7 @@ export function InterventionLayer({ op, onReport }: { op: OperationController; o
                 transition={{ duration: 0.35 }}
               >
                 {phase === 'intervention' && (
-                  <InterventionPanel intervention={intervention!} payment={payment!} targetName={state.mission.target.name} onChoose={op.chooseAction} busy={busy} />
+                  <InterventionPanel intervention={intervention!} payment={payment!} targetName={state.mission.target.name} onChoose={op.chooseAction} busy={busy} onReadAloud={onReadAloud} speaking={guardianSpeaking} />
                 )}
                 {phase === 'verifying' && verification && (
                   <VerificationPanel verification={verification} target={state.mission.target} onStop={op.stopPaymentAndExit} busy={busy} />

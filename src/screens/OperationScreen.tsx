@@ -12,9 +12,26 @@ import { RiskMeter } from '../operation/RiskMeter';
 import { SignalBoard } from '../operation/SignalBoard';
 import { SpotlightBanner } from '../operation/SpotlightBanner';
 import { TargetDossier } from '../operation/TargetDossier';
+import type { VoiceController } from '../voice/useVoice';
+import type { CaseFileVoiceScript } from '../voice/voiceScript';
 
-export function OperationScreen({ op, onHome, onReport }: { op: OperationController; onHome: () => void; onReport: () => void }) {
+export function OperationScreen({
+  op,
+  onHome,
+  onReport,
+  voice,
+  voiceScript,
+}: {
+  op: OperationController;
+  onHome: () => void;
+  onReport: () => void;
+  voice?: VoiceController;
+  voiceScript?: CaseFileVoiceScript;
+}) {
   const { state } = op;
+  const clipId = voice?.speaking ? voice.currentClipId : null;
+  const speakingMessageId = clipId?.startsWith('msg:') ? clipId.slice(4) : null;
+  const readAloud = voice && voiceScript ? () => voice.play(voiceScript.intervention, { force: true }) : undefined;
   const showPayment = state.payment !== null && ['payment', 'analyzing', 'intervention', 'verifying', 'cooldown', 'exit'].includes(state.phase);
 
   const handleNext = () => (state.phase === 'protected' ? onReport() : op.next());
@@ -37,7 +54,7 @@ export function OperationScreen({ op, onHome, onReport }: { op: OperationControl
   return (
     <div className="relative min-h-screen">
       <div className="bg-grid pointer-events-none fixed inset-0 opacity-60" aria-hidden />
-      <OperationHeader op={op} caseNumber={state.mission.caseNumber} onHome={onHome} onNext={handleNext} />
+      <OperationHeader op={op} caseNumber={state.mission.caseNumber} onHome={onHome} onNext={handleNext} voice={voice} />
 
       <main className="relative grid gap-4 p-4 lg:h-[calc(100vh-4rem)] lg:grid-cols-[300px_minmax(0,1fr)_340px] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)_370px]">
         {/* LEFT: target + crew */}
@@ -61,6 +78,7 @@ export function OperationScreen({ op, onHome, onReport }: { op: OperationControl
                 onStart={op.next}
                 canStart={op.canAdvance}
                 compact={showPayment}
+                speakingMessageId={speakingMessageId}
               />
             </div>
             <AnimatePresence>
@@ -89,7 +107,7 @@ export function OperationScreen({ op, onHome, onReport }: { op: OperationControl
         </div>
       </main>
 
-      <InterventionLayer op={op} onReport={onReport} />
+      <InterventionLayer op={op} onReport={onReport} onReadAloud={readAloud} guardianSpeaking={clipId === voiceScript?.intervention.id} />
     </div>
   );
 }
