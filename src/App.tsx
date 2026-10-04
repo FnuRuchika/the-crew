@@ -6,6 +6,8 @@ import { buildMissionReport } from './mission-report/buildMissionReport';
 import { MissionReport } from './mission-report/MissionReport';
 import { LiveAnalysisScreen } from './live-analysis/LiveAnalysisScreen';
 import { LiveCallScreen } from './live-call/LiveCallScreen';
+import { useCaseFileLedger } from './ledger/useCaseFileLedger';
+import { useLedgerSnapshot } from './ledger/useLedger';
 import { LandingScreen } from './screens/LandingScreen';
 import { OperationScreen } from './screens/OperationScreen';
 import { useCaseFileVoice } from './voice/useCaseFileVoice';
@@ -49,6 +51,8 @@ export default function App() {
   }, [op.state.phase]);
 
   useCaseFileVoice(op.state, voice, caseFileVoice, screen === 'operation');
+  // Evidence ledger (Tiger Data). Observes the operation; never changes it.
+  const caseLedger = useLedgerSnapshot(useCaseFileLedger(op.state));
 
   const report = useMemo(() => (screen === 'report' ? buildMissionReport(op.state) : null), [screen, op.state]);
 
@@ -73,8 +77,8 @@ export default function App() {
           {screen === 'landing' && <LandingScreen onBegin={begin} onTestCrew={() => setScreen('live')} onLiveCall={() => setScreen('call')} />}
           {screen === 'call' && <LiveCallScreen voice={voice} onHome={home} onCaseFile={begin} onTyped={() => setScreen('live')} />}
           {screen === 'live' && <LiveAnalysisScreen onHome={home} onCaseFile={begin} />}
-          {screen === 'operation' && <OperationScreen op={op} onHome={home} onReport={() => setScreen('report')} voice={voice} voiceScript={caseFileVoice} />}
-          {screen === 'report' && report && <MissionReport report={report} onReplay={replay} onHome={home} voicePowered={voice.used} />}
+          {screen === 'operation' && <OperationScreen op={op} onHome={home} onReport={() => setScreen('report')} voice={voice} voiceScript={caseFileVoice} ledgerOffline={caseLedger.connection === 'offline' && op.state.phase !== 'briefing'} />}
+          {screen === 'report' && report && <MissionReport report={report} onReplay={replay} onHome={home} voicePowered={voice.used} ledger={caseLedger.entries.length ? caseLedger : undefined} />}
         </motion.div>
       </AnimatePresence>
     </MotionConfig>

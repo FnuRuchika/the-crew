@@ -25,12 +25,14 @@ export function OperationHeader({
   onHome,
   onNext,
   voice,
+  ledgerOffline = false,
 }: {
   op: OperationController;
   caseNumber: string;
   onHome: () => void;
   onNext: () => void;
   voice?: VoiceController;
+  ledgerOffline?: boolean;
 }) {
   const status = PHASE_STATUS[op.state.phase];
   const done = op.state.phase === 'protected';
@@ -51,6 +53,11 @@ export function OperationHeader({
         </span>
 
         <div className="ml-auto flex items-center gap-2" role="group" aria-label="Demo controls">
+          {ledgerOffline && (
+            <span className="hidden font-mono text-[11px] uppercase tracking-wider text-zinc-500 lg:inline" title="The evidence ledger is unreachable. Events are kept for this session.">
+              Ledger offline
+            </span>
+          )}
           <span className="op-label mr-1 hidden xl:inline">Demo control</span>
           <Button variant="ghost" size="sm" onClick={onHome} className="hidden sm:inline-flex" aria-label="Mission control">
             <Home size={15} aria-hidden />

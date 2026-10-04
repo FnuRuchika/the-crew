@@ -14,6 +14,8 @@ import { RiskMeter } from '../operation/RiskMeter';
 import { SpotlightBanner } from '../operation/SpotlightBanner';
 import type { VoiceController } from '../voice/useVoice';
 import { VoiceToggle } from '../voice/VoiceToggle';
+import { EvidenceLedger } from '../ledger/EvidenceLedger';
+import { useLedgerSnapshot } from '../ledger/useLedger';
 import { DEMO_CALL_SEGMENTS, LIVE_GUARDIAN_CLIP } from './liveCallScript';
 import { findPhrase, LIVE_EXIT_PLANS, type LedgerSignal, type Segment } from './liveSession';
 import { MAX_SEGMENT_SECONDS, useLiveCall, type LiveCallController } from './useLiveCall';
@@ -232,6 +234,7 @@ export function LiveCallScreen({
 }) {
   const live = useLiveCall();
   const { session } = live;
+  const ledgerSnap = useLedgerSnapshot(live.recorder);
   const v = useRef(voice);
   v.current = voice;
 
@@ -261,6 +264,11 @@ export function LiveCallScreen({
             {session.stage !== 'none' ? 'Heist detected' : live.micState === 'listening' ? 'Listening' : session.startedAt ? 'Session active' : 'Standing by'}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {live.recorder && ledgerSnap.connection === 'offline' && (
+              <span className="hidden font-mono text-[11px] uppercase tracking-wider text-zinc-500 lg:inline" title="The evidence ledger is unreachable. Events are kept for this session.">
+                Ledger offline
+              </span>
+            )}
             <VoiceToggle voice={voice} />
             <Button variant="secondary" size="sm" onClick={live.reset} aria-label="Reset live call session">
               <RotateCcw size={15} aria-hidden /> <span className="hidden sm:inline">Reset</span>
@@ -286,9 +294,12 @@ export function LiveCallScreen({
             <Timeline live={live} onTyped={onTyped} />
           </div>
           {session.stage === 'closed' && (
-            <p className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-200">
-              <ShieldCheck size={18} aria-hidden /> Safe exit plan delivered. You can keep recording, or reset to start a new call.
-            </p>
+            <>
+              <p className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-200">
+                <ShieldCheck size={18} aria-hidden /> Safe exit plan delivered. Reset to start a new call.
+              </p>
+              {live.recorder && <EvidenceLedger snapshot={ledgerSnap} />}
+            </>
           )}
           {session.ledger.length > 0 && (
             <div>

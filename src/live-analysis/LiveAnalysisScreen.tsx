@@ -173,6 +173,7 @@ export function LiveAnalysisScreen({ onHome, onCaseFile }: { onHome: () => void;
                   </div>
                   <p className="font-mono text-xs text-zinc-600">
                     Analysis by {run.response.model} in {(run.response.latency_ms / 1000).toFixed(1)}s · message not stored
+                    {live.ledgerId && <> · evidence saved to ledger OP-{live.ledgerId.slice(0, 8).toUpperCase()}</>}
                   </p>
                 </motion.div>
               )}

@@ -11,7 +11,8 @@
     "test:risk": "tsx scripts/risk-check.ts",
     "smoke:live": "tsx scripts/smoke-live.ts",
     "prewarm:voice": "tsx scripts/prewarm-voice.ts",
-    "test:live": "tsx scripts/live-session-check.ts"
+    "test:live": "tsx scripts/live-session-check.ts",
+    "db:migrate": "cd backend && .venv/bin/python -m db.migrate"
   },
   "dependencies": {
     "framer-motion": "^14.0.0",

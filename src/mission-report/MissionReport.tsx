@@ -6,6 +6,8 @@ import { Button, Panel } from '../components/ui/primitives';
 import { CREW, FIELD_AGENTS } from '../data/crew';
 import { cx, formatClock, formatDuration, formatMoney } from '../lib/format';
 import { SEVERITY_STYLE } from '../lib/riskStyle';
+import { EvidenceLedger } from '../ledger/EvidenceLedger';
+import type { LedgerSnapshot } from '../ledger/LedgerRecorder';
 import { EventTimeline } from './EventTimeline';
 import type { MissionReportData } from './buildMissionReport';
 
@@ -29,12 +31,15 @@ export function MissionReport({
   onReplay,
   onHome,
   voicePowered = false,
+  ledger,
 }: {
   report: MissionReportData;
   onReplay: () => void;
   onHome: () => void;
   /** ElevenLabs voice actually played during this session */
   voicePowered?: boolean;
+  /** Evidence ledger for this operation (Tiger Data, or the in-memory session copy) */
+  ledger?: LedgerSnapshot;
 }) {
   const summary = [
     { label: 'Amount protected', value: formatMoney(report.amountProtected), tone: 'text-emerald-300' },
@@ -188,11 +193,17 @@ export function MissionReport({
         </div>
 
         {/* Timeline */}
-        <Panel title="Chronological event timeline" className="mt-6" right={<span className="op-label">{formatDuration(report.durationSeconds)} total</span>}>
-          <div className="p-6">
-            <EventTimeline events={report.timeline} />
+        {ledger ? (
+          <div className="mt-6">
+            <EvidenceLedger snapshot={ledger} />
           </div>
-        </Panel>
+        ) : (
+          <Panel title="Chronological event timeline" className="mt-6" right={<span className="op-label">{formatDuration(report.durationSeconds)} total</span>}>
+            <div className="p-6">
+              <EventTimeline events={report.timeline} />
+            </div>
+          </Panel>
+        )}
 
         {voicePowered && (
           <p className="mt-8 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-600">Voice intelligence powered by ElevenLabs</p>

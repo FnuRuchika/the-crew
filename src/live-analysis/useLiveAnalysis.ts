@@ -4,6 +4,8 @@ import { scoreLiveSignals, type LiveAssessment } from '../engine/liveRiskEngine'
 import { RISK_STYLE } from '../lib/riskStyle';
 import type { AgentId, AgentRuntime, OperationState } from '../types';
 import { analyzeTransmission, fetchHealth } from './api';
+import { LedgerRecorder } from '../ledger/LedgerRecorder';
+import { agentForSignal } from '../live-call/liveSession';
 import type { AnalyzeResponse, ApiError, HealthResponse } from './types';
 
 export type LivePhase = 'idle' | 'receiving' | 'analyzing' | 'scoring' | 'done' | 'error';
@@ -25,6 +27,7 @@ export function useLiveAnalysis() {
   const [run, setRun] = useState<LiveRun | null>(null);
   const [health, setHealth] = useState<HealthState>({ kind: 'checking' });
   const [spotKey, setSpotKey] = useState(0);
+  const [ledgerId, setLedgerId] = useState<string | null>(null);
   const gen = useRef(0);
 
   const checkHealth = useCallback(async () => {
@@ -42,6 +45,7 @@ export function useLiveAnalysis() {
       const g = ++gen.current;
       const alive = () => g === gen.current;
       setRun({ text });
+      setLedgerId(null);
       setPhase('receiving');
       setSpotKey((k) => k + 1);
       await sleep(650);
@@ -63,9 +67,24 @@ export function useLiveAnalysis() {
       setSpotKey((k) => k + 1);
       await sleep(1100);
       if (!alive()) return;
-      setRun({ text, response: result.data, assessment: scoreLiveSignals(result.data.analysis.signals) });
+      const assessment = scoreLiveSignals(result.data.analysis.signals);
+      setRun({ text, response: result.data, assessment });
       setPhase('done');
       setSpotKey((k) => k + 1);
+
+      // Evidence ledger: fire-and-forget, never blocks or alters the result.
+      // Stores evidence phrases only, never the submitted message.
+      const rec = new LedgerRecorder('typed', 'test-the-crew');
+      rec.agent('mastermind', 'active', 'Transmission received');
+      for (const sig of result.data.analysis.signals) {
+        rec.signal({ kind: 'signal', signal_type: sig.type, label: sig.label, confidence: sig.confidence, evidence: sig.evidence.slice(0, 300), explanation: sig.explanation.slice(0, 500), detected_by: agentForSignal(sig.type), source: 'gemini' });
+      }
+      rec.agent('grifter', 'complete', `${result.data.analysis.signals.length} signal(s) identified`);
+      rec.risk(assessment.score, assessment.level, `${assessment.countedSignals} distinct tactic(s)`);
+      void rec.complete({ final_status: 'assessed', peak_risk: assessment.score, outcome: `${assessment.level.toUpperCase()} risk verdict` }).then(() => {
+        const snap = rec.getSnapshot();
+        if (alive() && snap.syncedClose) setLedgerId(snap.operationId);
+      });
     },
     [checkHealth],
   );
@@ -122,5 +141,5 @@ export function useLiveAnalysis() {
       }
     : null;
 
-  return { phase, run, health, agents, spotlight, analyze, reset, checkHealth, busy: ['receiving', 'analyzing', 'scoring'].includes(phase) };
+  return { phase, run, health, agents, spotlight, analyze, reset, checkHealth, ledgerId, busy: ['receiving', 'analyzing', 'scoring'].includes(phase) };
 }

@@ -17,6 +17,8 @@ import {
   type Segment,
 } from './liveSession';
 import { transcribeAudio } from './transcribeApi';
+import { LedgerRecorder } from '../ledger/LedgerRecorder';
+import { agentForSignal } from './liveSession';
 
 export const MAX_SEGMENT_SECONDS = 30;
 export const MIN_SEGMENT_SECONDS = 1;
@@ -97,6 +99,9 @@ export function useLiveCall() {
   const mic = useRef<{ stream?: MediaStream; recorder?: MediaRecorder; ctx?: AudioContext; raf?: number; timer?: number; started?: number; chunks: Blob[] }>({ chunks: [] });
   const failedAudio = useRef(new Map<string, Blob>()); // kept in browser memory only, for Retry
   const demoAudio = useRef<HTMLAudioElement | null>(null);
+  // Evidence ledger (Tiger Data). Secondary to safety: never awaited by the live flow.
+  const ledgerRec = useRef<LedgerRecorder | null>(null);
+  const [recorder, setRecorder] = useState<LedgerRecorder | null>(null);
 
   const now = () => (ref.current.startedAt ? (Date.now() - ref.current.startedAt) / 1000 : 0);
 
@@ -108,6 +113,9 @@ export function useLiveCall() {
 
   const ensureStarted = useCallback(() => {
     if (ref.current.startedAt) return;
+    ledgerRec.current = new LedgerRecorder('live_call', 'live-call');
+    ledgerRec.current.agent('mastermind', 'active', 'Listening to the conversation.');
+    setRecorder(ledgerRec.current);
     update((s) => ({ ...s, startedAt: Date.now(), agents: applyDeployments(s.agents, [{ agentId: 'mastermind', status: 'active', reason: 'Listening to the conversation.' }], 0) }));
     log({ type: 'operation', agent: 'mastermind', title: 'Live call session opened', detail: 'Mastermind listening' });
   }, [update, log]);
@@ -136,6 +144,7 @@ export function useLiveCall() {
     if (!r.ok) {
       update((s) => ({ ...s, analysis: { status: 'failed', error: r.error } }));
       log({ type: 'assessment', agent: 'mastermind', title: 'Analysis temporarily unavailable', detail: r.error.code });
+      ledgerRec.current?.milestone('note', 'Analysis temporarily unavailable', r.error.code, 'mastermind');
       return;
     }
     const at = now();
@@ -160,6 +169,16 @@ export function useLiveCall() {
         : s.spotlight,
       analysis: { status: 'done', model: r.data.model, latencyMs: r.data.latency_ms },
     }));
+    // Ledger: only short evidence phrases, never the transcript. Re-reported evidence is
+    // de-duplicated locally and by the database's unique key.
+    const L = ledgerRec.current;
+    if (L) {
+      for (const sig of r.data.analysis.signals) {
+        L.signal({ kind: 'signal', signal_type: sig.type, label: sig.label, confidence: sig.confidence, evidence: sig.evidence.slice(0, 300), explanation: sig.explanation.slice(0, 500), detected_by: agentForSignal(sig.type), source: 'gemini' });
+      }
+      L.risk(assessment.score, assessment.level, `${assessment.countedSignals} distinct tactic(s)`);
+      for (const d of plan.deployments) L.agent(d.agentId, d.status, d.reason);
+    }
     for (const note of plan.notes) log({ type: 'deployment', agent: 'mastermind', title: note });
     for (const d of plan.deployments) log({ type: 'deployment', agent: d.agentId, title: `${AGENT_NAME(d.agentId)} · ${d.status.toUpperCase()}`, detail: d.reason });
     log({ type: 'assessment', agent: 'safecracker', title: `Risk ${assessment.score}% · ${assessment.level.toUpperCase()}`, riskScore: assessment.score, detail: `${assessment.countedSignals} distinct tactic(s), ${ledger.length} piece(s) of evidence` });
@@ -167,6 +186,7 @@ export function useLiveCall() {
     if (assessment.level === 'critical' && ref.current.stage === 'none') {
       const intervention = buildLiveIntervention(ledger, assessment, at);
       update((s) => ({ ...s, intervention, stage: 'open' }));
+      ledgerRec.current?.intervention(assessment.score, intervention.reasons.map((x) => x.label));
       log({ type: 'intervention', agent: 'fixer', title: 'Potential heist detected. Safe options offered.', riskScore: assessment.score });
     }
   }, [update, log]);
@@ -192,6 +212,8 @@ export function useLiveCall() {
       }));
       const n = ref.current.segments.find((x) => x.id === segId)?.n;
       log({ type: 'conversation', title: `Segment ${n} transcribed`, detail: `“${r.data.text}”` });
+      const src = ref.current.segments.find((x) => x.id === segId)?.source;
+      ledgerRec.current?.milestone('segment_analyzed', `Segment ${n} transcribed`, `${r.data.model} · ${(r.data.latency_ms / 1000).toFixed(1)}s · ${src === 'demo' ? 'demo audio' : 'microphone'} (audio discarded)`, 'mastermind');
       await analyzeSession();
       if (g === gen.current) setMicState('idle');
     },
@@ -355,6 +377,9 @@ export function useLiveCall() {
         spotlight: { agentId: 'getaway', title: 'GETAWAY DRIVER DEPLOYED', reason: 'Safe exit plan ready', key: (s.spotlight?.key ?? 0) + 1 },
       }));
       log({ type: 'deployment', agent: 'mastermind', title: 'Deploying GETAWAY DRIVER.' });
+      const label = id === 'exit' ? 'End the call' : id === 'verify-claimed-person' ? 'Verify independently' : 'Call a trusted contact';
+      ledgerRec.current?.action(id, `Safe option chosen: ${label}`);
+      ledgerRec.current?.agent('getaway', 'active', 'Guiding a safe exit and independent verification.');
       log({ type: 'intervention', agent: 'getaway', title: `Safe option chosen: ${id === 'exit' ? 'end the call' : id === 'verify-claimed-person' ? 'verify independently' : 'call a trusted contact'}` });
     },
     [update, log],
@@ -363,6 +388,9 @@ export function useLiveCall() {
   const closeIntervention = useCallback(() => {
     update((s) => ({ ...s, stage: 'closed' }));
     log({ type: 'outcome', agent: 'getaway', title: 'Safe exit plan delivered' });
+    const s0 = ref.current;
+    ledgerRec.current?.outcome('Safe exit plan delivered. No money sent.', 'getaway');
+    void ledgerRec.current?.complete({ final_status: 'safe_exit', peak_risk: Math.max(0, ...s0.history.map((p) => p.score)), threat_type: s0.claimedIdentity ? `Impersonation: ${s0.claimedIdentity}`.slice(0, 120) : undefined, outcome: 'Safe exit plan delivered. No money sent.' });
   }, [update, log]);
 
   const reset = useCallback(() => {
@@ -371,6 +399,11 @@ export function useLiveCall() {
     demoAudio.current?.pause();
     demoAudio.current = null;
     failedAudio.current.clear();
+    if (ledgerRec.current && !ledgerRec.current.getSnapshot().completed) {
+      void ledgerRec.current.complete({ final_status: 'abandoned', peak_risk: Math.max(0, ...ref.current.history.map((p) => p.score)) });
+    }
+    ledgerRec.current = null;
+    setRecorder(null);
     setMicError(null);
     setElapsed(0);
     ref.current = freshSession();
@@ -394,6 +427,7 @@ export function useLiveCall() {
 
   return {
     session,
+    recorder,
     micState,
     micError,
     elapsed,

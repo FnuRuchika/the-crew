@@ -21,12 +21,14 @@ export function OperationScreen({
   onReport,
   voice,
   voiceScript,
+  ledgerOffline = false,
 }: {
   op: OperationController;
   onHome: () => void;
   onReport: () => void;
   voice?: VoiceController;
   voiceScript?: CaseFileVoiceScript;
+  ledgerOffline?: boolean;
 }) {
   const { state } = op;
   const clipId = voice?.speaking ? voice.currentClipId : null;
@@ -54,7 +56,7 @@ export function OperationScreen({
   return (
     <div className="relative min-h-screen">
       <div className="bg-grid pointer-events-none fixed inset-0 opacity-60" aria-hidden />
-      <OperationHeader op={op} caseNumber={state.mission.caseNumber} onHome={onHome} onNext={handleNext} voice={voice} />
+      <OperationHeader op={op} caseNumber={state.mission.caseNumber} onHome={onHome} onNext={handleNext} voice={voice} ledgerOffline={ledgerOffline} />
 
       <main className="relative grid gap-4 p-4 lg:h-[calc(100vh-4rem)] lg:grid-cols-[300px_minmax(0,1fr)_340px] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)_370px]">
         {/* LEFT: target + crew */}

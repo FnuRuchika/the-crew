@@ -53,6 +53,7 @@ is enough for a demo. `backend/.env` is git-ignored.
 | `npm run smoke:live` | Sends the 3 reference messages to the running backend (needs key) |
 | `npm run prewarm:voice` | Generates and caches all Case File 001 + Live Call demo voice clips (needs backend + `ELEVENLABS_API_KEY`) |
 | `npm run test:live` | Live Call session logic checks (no network) |
+| `npm run db:migrate` | Apply Evidence Ledger migrations to Tiger Data (`DATABASE_URL`) |
 | `cd backend && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest` | Backend tests (mocked Gemini, no key needed) |
 
 ## Demo script (≈ 2 minutes)
@@ -236,6 +237,62 @@ Microphone (MediaRecorder) → POST /api/transcribe → ElevenLabs Speech-to-Tex
   checked), 20 per minute per IP, 20s upstream timeout, fallback to `scribe_v1`.
 - `npm run test:live` checks session windowing, evidence de-duplication and selective crew deployment.
 
+## Evidence Ledger: Tiger Data (Phase 5)
+
+**Gemini understands the conversation. ElevenLabs gives THE CREW ears and a voice. Tiger Data gives THE CREW memory.
+THE CREW's deterministic policy engine decides when to intervene.**
+
+Every operation (Case File 001, TEST THE CREW, Live Call) is recorded as a chronological, explainable evidence
+trail in Tiger Data (PostgreSQL + TimescaleDB). The Mission Report and the end of a Live Call show the **Evidence
+Ledger**, reconstructed from the database: what was noticed (with the exact evidence phrase), when risk escalated,
+which agents responded, why THE CREW intervened, what the person chose, and the outcome.
+
+### Setup
+
+```bash
+# backend/.env
+DATABASE_URL=postgres://…?sslmode=require   # your Tiger Data service URI (never commit)
+
+npm run db:migrate        # repeatable: applies pending migrations, prints only versions/hypertables
+```
+The backend also migrates automatically at startup (in the background: the API never waits on the database).
+
+### Schema (`backend/db/migrations/`, schema `crew`)
+
+| Table | Kind | Why |
+|---|---|---|
+| `operations` | PostgreSQL table | One row per operation: mode, start/end, peak risk, status, amount protected, threat, outcome |
+| `signals` | PostgreSQL table, `UNIQUE(operation_id, signal_type, evidence_key)` | De-duplicated evidence entities: confidence, label, evidence phrase, explanation, detecting agent, source, `times_seen` |
+| `interventions` | PostgreSQL table | Trigger score, reasons, action selected, outcome |
+| `risk_events` | **Hypertable** (7-day chunks) | Risk score/level over time |
+| `agent_events` | **Hypertable** | Crew deployments and stand-downs |
+| `milestones` | **Hypertable** | Payment initiated, segment analyzed (metadata only), verification, action, outcome |
+
+**TimescaleDB, used where it fits:** the three append-only event streams are hypertables. Ledger reads filter by
+the operation's time window, so only the relevant chunks are scanned. A **columnstore policy** (segmented by
+`operation_id`) compresses history after 7 days, and **`time_bucket`** powers the escalation analysis
+("first warning sign → critical in N s", 5-second risk trajectory). Entities that need uniqueness (signals,
+interventions) stay plain PostgreSQL. Foreign keys, CHECK constraints and indexes throughout.
+
+### De-duplication
+Gemini re-analyzes the whole conversation on every Live Call segment and often re-quotes the same moment.
+A signal is the *same evidence* when it has the same tactic and its normalized phrase is identical, contained in
+the other, or overlaps by at least 60% of words. The repeat updates the existing row (`times_seen`, max confidence) instead of
+inserting a new one. Appends lock the operation row, so this is race-free, and they're idempotent under retries
+(a re-sent event with the same `seq` changes nothing).
+
+### Privacy: what is NOT stored
+No audio (no binary columns exist), no full transcripts or typed messages (only the short evidence phrase
+behind each signal, max 300 chars), no API keys, no `DATABASE_URL`, no IPs or device data. Case File 001 is fictional.
+
+### Offline by design
+The ledger is **never** on the safety path. Each operation keeps an in-memory session ledger. Events are mirrored to
+Tiger Data in small background batches with 4-second timeouts. On the first failure the operation switches to
+**Ledger offline** (subtle label, no retries, no error shown to the user) and the report shows the session copy.
+The backend uses a small pool (1–4 connections) and a 30-second circuit breaker, and logs only exception types (never
+hosts or credentials). "Operational intelligence powered by Tiger Data" appears only when the ledger was actually
+reconstructed from the database.
+
 ## Integration map (future phases)
 
 | Integration | Where it connects | Notes |
@@ -243,7 +300,7 @@ Microphone (MediaRecorder) → POST /api/transcribe → ElevenLabs Speech-to-Tex
 | **FastAPI backend** | ✅ `backend/` (Phase 2). Later: `src/services/index.ts` → `crew: createRemoteCrew(...)` implementing `Crew` | All keys live server-side. The browser never sees them. |
 | **Google Gemini** | ✅ Phase 2: **Grifter** in *Test the Crew* (`backend/services/gemini_service.py`). Next: Mastermind (`Mastermind.plan` / `classifyThreat`), and the Grifter inside Case File 001 via `ConversationAnalyst.analyze` | Structured output. The deterministic engine keeps the safety decision. |
 | **ElevenLabs** | ✅ Phase 3: `backend/services/elevenlabs_service.py` + `src/voice/` | Caller, guardian and family voices for Case File 001. Later: live call audio → transcript → Grifter. |
-| **Tiger Data / PostgreSQL** | `MissionEventStore` (Phase 1: in-memory, already receives every `MissionEvent`) | Hypertable of timestamped mission / risk / intervention events. Lookout payee history can come from here too. |
+| **Tiger Data / PostgreSQL** | ✅ Phase 5: `backend/db/` + `backend/routes/ledger.py` + `src/ledger/` | Evidence Ledger (hypertables + columnstore + time_bucket). Later: Lookout payee history. |
 | **Presage** | `PhysiologicalContextProvider` (Phase 1: disabled) | Opt-in only. At most **one weak signal** in the risk engine, never proof of a scam. |
 | **Vultr** | Deploy the FastAPI service + `npm run build` static output | |
 | **GoDaddy** | Domain pointing at the Vultr deployment | |

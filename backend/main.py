@@ -5,10 +5,12 @@ Run (from backend/):  uvicorn main:app --reload --port 8000
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +25,8 @@ load_dotenv(Path(__file__).parent / ".env")
 from models.analysis import MAX_INPUT_CHARS, AnalyzeRequest, AnalyzeResponse, ErrorResponse  # noqa: E402
 from services.elevenlabs_service import MAX_TEXT_CHARS, ElevenLabsService, VoiceConfig, VoiceError, VoiceRole  # noqa: E402
 from services.gemini_service import GeminiConfig, GeminiError, GeminiService  # noqa: E402
+from db.database import Database  # noqa: E402
+from routes.ledger import router as ledger_router  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("the_crew")
@@ -33,17 +37,29 @@ ORIGINS = [
     if o.strip()
 ]
 
-app = FastAPI(title="THE CREW API", version="0.2.0", docs_url="/api/docs", openapi_url="/api/openapi.json")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Connect to Tiger Data in the background: the API (and every safety feature) is
+    # available immediately, whether or not the ledger comes online.
+    task = asyncio.create_task(app.state.db.start())
+    yield
+    task.cancel()
+    await app.state.db.close()
+
+
+app = FastAPI(title="THE CREW API", version="0.3.0", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGINS,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Content-Type"],
     expose_headers=["X-Voice-Cache"],
 )
 
 app.state.gemini = GeminiService(GeminiConfig.from_env())
 app.state.voice = ElevenLabsService(VoiceConfig.from_env())
+app.state.db = Database.from_env()
+app.include_router(ledger_router)
 
 
 def error(status: int, code: str, message: str, retryable: bool) -> JSONResponse:
