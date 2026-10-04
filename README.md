@@ -294,7 +294,8 @@ the-crew/
 Built for **RowdyHacks XII**: *SWIVEL: The Social Engineering Shield*.
 
 <!-- Add team member names and roles here. -->
-
+**Ruchika Sharma**
+**Pranav Wani**
 <div align="center">
 
 **THE CREW: because the best time to stop a heist is before the vault opens.**
