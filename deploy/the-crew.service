@@ -1,0 +1,30 @@
+# THE CREW: FastAPI backend (systemd unit template).
+#
+# Install:  sudo cp /opt/the-crew/deploy/the-crew.service /etc/systemd/system/the-crew.service
+#           sudo systemctl daemon-reload && sudo systemctl enable --now the-crew
+#
+# Contains NO secrets. Keys live only in /opt/the-crew/backend/.env (chmod 600) on the server.
+# Uvicorn binds to 127.0.0.1 only: Nginx is the single public entry point.
+# --proxy-headers + --forwarded-allow-ips 127.0.0.1 make the per-IP rate limits see the real
+# client address from Nginx's X-Forwarded-For (only trusted when it comes from local Nginx).
+# One worker on purpose: the rate limiter is in-memory, and the box has 1 GB RAM.
+
+[Unit]
+Description=THE CREW FastAPI Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/the-crew/backend
+EnvironmentFile=/opt/the-crew/backend/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/the-crew/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
