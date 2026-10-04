@@ -10,11 +10,16 @@ import {
   applyDeployments,
   buildAnalysisText,
   buildLiveIntervention,
+  filterCallerSignals,
+  hasCallerSpeech,
   initialLiveAgents,
   mergeSignals,
   planLiveCrew,
+  speakerOf,
+  triggersAnalysis,
   type LedgerSignal,
   type Segment,
+  type Speaker,
 } from './liveSession';
 import { transcribeAudio } from './transcribeApi';
 import { LedgerRecorder } from '../ledger/LedgerRecorder';
@@ -92,11 +97,12 @@ export function useLiveCall() {
 
   const [micState, setMicState] = useState<MicState>('idle');
   const [micError, setMicError] = useState<string | null>(null);
+  const [recordingSpeaker, setRecordingSpeaker] = useState<Speaker | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [levels, setLevels] = useState<number[]>(() => Array(28).fill(0));
 
   const gen = useRef(0);
-  const mic = useRef<{ stream?: MediaStream; recorder?: MediaRecorder; ctx?: AudioContext; raf?: number; timer?: number; started?: number; chunks: Blob[] }>({ chunks: [] });
+  const mic = useRef<{ stream?: MediaStream; recorder?: MediaRecorder; ctx?: AudioContext; raf?: number; timer?: number; started?: number; speaker?: Speaker; chunks: Blob[] }>({ chunks: [] });
   const failedAudio = useRef(new Map<string, Blob>()); // kept in browser memory only, for Retry
   const demoAudio = useRef<HTMLAudioElement | null>(null);
   // Evidence ledger (Tiger Data). Secondary to safety: never awaited by the live flow.
@@ -129,6 +135,7 @@ export function useLiveCall() {
     m.stream?.getTracks().forEach((t) => t.stop()); // the browser's recording indicator turns off here
     void m.ctx?.close().catch(() => {});
     mic.current = { chunks: [] };
+    setRecordingSpeaker(null);
     setLevels(Array(28).fill(0));
   }, []);
 
@@ -137,7 +144,7 @@ export function useLiveCall() {
   const analyzeSession = useCallback(async () => {
     const g = gen.current;
     const text = buildAnalysisText(ref.current.segments);
-    if (!text) return;
+    if (!text || !hasCallerSpeech(ref.current.segments)) return; // USER lines alone are context, not evidence
     update((s) => ({ ...s, analysis: { status: 'analyzing' } }));
     const r = await analyzeTransmission(text);
     if (g !== gen.current) return;
@@ -149,7 +156,9 @@ export function useLiveCall() {
     }
     const at = now();
     const s0 = ref.current;
-    const ledger = mergeSignals(s0.ledger, r.data.analysis.signals, s0.segments, at);
+    // Speaker-aware: tactics are attributed to the CALLER only, before anything is scored.
+    const signals = filterCallerSignals(r.data.analysis.signals, s0.segments);
+    const ledger = mergeSignals(s0.ledger, signals, s0.segments, at);
     const assessment = scoreLiveSignals(ledger);
     const claimedIdentity = r.data.analysis.claimed_identity ?? s0.claimedIdentity;
     const plan = planLiveCrew({ agents: s0.agents, ledger, assessment, claimedIdentity });
@@ -173,7 +182,7 @@ export function useLiveCall() {
     // de-duplicated locally and by the database's unique key.
     const L = ledgerRec.current;
     if (L) {
-      for (const sig of r.data.analysis.signals) {
+      for (const sig of signals) {
         L.signal({ kind: 'signal', signal_type: sig.type, label: sig.label, confidence: sig.confidence, evidence: sig.evidence.slice(0, 300), explanation: sig.explanation.slice(0, 500), detected_by: agentForSignal(sig.type), source: 'gemini' });
       }
       L.risk(assessment.score, assessment.level, `${assessment.countedSignals} distinct tactic(s)`);
@@ -210,20 +219,23 @@ export function useLiveCall() {
         ...s,
         segments: s.segments.map((x) => (x.id === segId ? { ...x, status: 'transcribed', text: r.data.text, sttModel: r.data.model, sttLatencyMs: r.data.latency_ms } : x)),
       }));
-      const n = ref.current.segments.find((x) => x.id === segId)?.n;
-      log({ type: 'conversation', title: `Segment ${n} transcribed`, detail: `“${r.data.text}”` });
-      const src = ref.current.segments.find((x) => x.id === segId)?.source;
-      ledgerRec.current?.milestone('segment_analyzed', `Segment ${n} transcribed`, `${r.data.model} · ${(r.data.latency_ms / 1000).toFixed(1)}s · ${src === 'demo' ? 'demo audio' : 'microphone'} (audio discarded)`, 'mastermind');
-      await analyzeSession();
+      const seg = ref.current.segments.find((x) => x.id === segId);
+      const n = seg?.n;
+      const who = seg ? speakerOf(seg) : 'caller';
+      log({ type: 'conversation', title: who === 'user' ? `Segment ${n} transcribed (user, context only)` : `Segment ${n} transcribed`, detail: `“${r.data.text}”` });
+      // Ledger gets the speaker label only, never the transcript.
+      ledgerRec.current?.milestone('segment_analyzed', `Segment ${n} transcribed`, `${r.data.model} · ${(r.data.latency_ms / 1000).toFixed(1)}s · ${seg?.source === 'demo' ? 'demo audio' : 'microphone'} · ${who.toUpperCase()} (audio discarded)`, 'mastermind');
+      // A USER segment is kept as context: the next CALLER segment is analysed with it.
+      if (seg && triggersAnalysis(seg)) await analyzeSession();
       if (g === gen.current) setMicState('idle');
     },
     [update, log, analyzeSession],
   );
 
   const addSegment = useCallback(
-    (audio: Blob, source: Segment['source']) => {
+    (audio: Blob, source: Segment['source'], speaker?: Speaker) => {
       ensureStarted();
-      const seg: Segment = { id: `seg-${++eventId}`, n: ref.current.segments.length + 1, at: now(), source, status: 'transcribing' };
+      const seg: Segment = { id: `seg-${++eventId}`, n: ref.current.segments.length + 1, at: now(), source, ...(speaker && { speaker }), status: 'transcribing' };
       update((s) => ({ ...s, segments: [...s.segments, seg] }));
       return transcribeSegment(seg.id, audio);
     },
@@ -232,7 +244,8 @@ export function useLiveCall() {
 
   // ─────────── Public controls ───────────
 
-  const startListening = useCallback(async () => {
+  /** Record one segment; `speaker` is fixed now, at the moment recording starts. */
+  const startListening = useCallback(async (speaker: Speaker = 'caller') => {
     setMicError(null);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setMicState('unsupported');
@@ -252,8 +265,9 @@ export function useLiveCall() {
     ensureStarted();
     const mime = pickMime();
     const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-    const m = { stream, recorder, chunks: [] as Blob[], started: Date.now() } as typeof mic.current;
+    const m = { stream, recorder, speaker, chunks: [] as Blob[], started: Date.now() } as typeof mic.current;
     mic.current = m;
+    setRecordingSpeaker(speaker);
     recorder.ondataavailable = (e) => e.data.size && m.chunks.push(e.data);
     recorder.start(250);
 
@@ -288,7 +302,7 @@ export function useLiveCall() {
       if (secs >= MAX_SEGMENT_SECONDS) stopRef.current();
     }, 200);
     setMicState('listening');
-    log({ type: 'operation', agent: 'mastermind', title: 'Microphone listening', detail: `Segment ${ref.current.segments.length + 1}` });
+    log({ type: 'operation', agent: 'mastermind', title: 'Microphone listening', detail: `Segment ${ref.current.segments.length + 1} · ${speaker.toUpperCase()}` });
   }, [ensureStarted, log]);
 
   const stopAndAnalyze = useCallback(() => {
@@ -303,7 +317,7 @@ export function useLiveCall() {
         setMicError('That recording was too short. Hold START LISTENING for at least a second of speech.');
         return;
       }
-      void addSegment(blob, 'mic');
+      void addSegment(blob, 'mic', m.speaker);
     };
     setMicState('processing');
     m.recorder.stop();
@@ -430,6 +444,7 @@ export function useLiveCall() {
     recorder,
     micState,
     micError,
+    recordingSpeaker,
     elapsed,
     levels,
     busy: micState === 'processing' || micState === 'requesting' || session.analysis.status === 'analyzing',

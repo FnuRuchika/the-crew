@@ -1,5 +1,5 @@
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
-import { AudioLines, FileText, Home, Loader2, Mic, MicOff, RotateCcw, ScanSearch, ShieldCheck, Square, TriangleAlert, Users, X } from 'lucide-react';
+import { AudioLines, FileText, Home, Loader2, Mic, MicOff, PhoneIncoming, RotateCcw, ScanSearch, ShieldCheck, Square, TriangleAlert, User, Users, X } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Brand } from '../components/Brand';
 import { AgentCard } from '../components/crew/AgentCard';
@@ -17,7 +17,7 @@ import { VoiceToggle } from '../voice/VoiceToggle';
 import { EvidenceLedger } from '../ledger/EvidenceLedger';
 import { useLedgerSnapshot } from '../ledger/useLedger';
 import { DEMO_CALL_SEGMENTS, LIVE_GUARDIAN_CLIP } from './liveCallScript';
-import { findPhrase, LIVE_EXIT_PLANS, type LedgerSignal, type Segment } from './liveSession';
+import { findPhrase, LIVE_EXIT_PLANS, speakerOf, type LedgerSignal, type Segment, type Speaker } from './liveSession';
 import { MAX_SEGMENT_SECONDS, useLiveCall, type LiveCallController } from './useLiveCall';
 
 const LIVE_LEAD = 'We noticed several warning signs in this conversation.';
@@ -26,22 +26,31 @@ const LIVE_REASSURANCE =
 
 // ─────────── Microphone control ───────────
 
+/** CALLER = the suspected scammer; USER = the person receiving the call (context only). */
+const SPEAKER: Record<Speaker, { label: string; role: string; Icon: typeof User }> = {
+  caller: { label: 'Caller', role: 'Suspected scammer', Icon: PhoneIncoming },
+  user: { label: 'User', role: 'Person receiving the call', Icon: User },
+};
+
 function MicControl({ live }: { live: LiveCallController }) {
-  const { micState, micError, elapsed, levels, busy, session } = live;
+  const { micState, micError, elapsed, levels, busy, session, recordingSpeaker } = live;
   const listening = micState === 'listening';
+  const who = recordingSpeaker ? SPEAKER[recordingSpeaker] : null;
   const demoLeft = DEMO_CALL_SEGMENTS.length - session.demoIndex;
   return (
     <Panel title="Microphone" icon={<Mic size={13} aria-hidden />} right={<span className="op-label">Segments of 1–{MAX_SEGMENT_SECONDS}s</span>}>
       <div className="flex flex-col items-center px-5 py-6 text-center">
         <div className="relative">
           {listening && <span className="absolute inset-0 animate-pulse-ring rounded-full border-2 border-red-500" aria-hidden />}
+          {/* While recording this is the stop button; otherwise an indicator (pick a speaker below). */}
           <button
-            onClick={listening ? live.stopAndAnalyze : () => void live.startListening()}
-            disabled={!listening && busy}
-            aria-label={listening ? 'Stop and analyze' : 'Start listening'}
+            onClick={live.stopAndAnalyze}
+            disabled={!listening}
+            aria-label={listening ? 'Stop and analyze' : 'Microphone off'}
             className={cx(
-              'relative inline-flex h-28 w-28 items-center justify-center rounded-full border-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              listening ? 'border-red-500 bg-red-500/15 text-red-300' : 'border-gold-400 bg-gold-400/10 text-gold-300 hover:bg-gold-400/20',
+              'relative inline-flex h-28 w-28 items-center justify-center rounded-full border-2 transition-colors disabled:cursor-default',
+              listening ? 'border-red-500 bg-red-500/15 text-red-300' : 'border-gold-400 bg-gold-400/10 text-gold-300',
+              !listening && busy && 'opacity-50',
             )}
           >
             {micState === 'processing' || micState === 'requesting' ? <Loader2 size={40} className="animate-spin" aria-hidden /> : listening ? <Square size={36} aria-hidden /> : <Mic size={44} aria-hidden />}
@@ -49,8 +58,14 @@ function MicControl({ live }: { live: LiveCallController }) {
         </div>
 
         <p className="mt-4 font-display text-2xl uppercase tracking-[0.18em] text-zinc-50" role="status" aria-live="polite">
-          {listening ? 'Listening…' : micState === 'requesting' ? 'Waiting for permission…' : micState === 'processing' ? 'Transcribing & analyzing…' : 'Start listening'}
+          {listening ? `Recording ${who?.label ?? ''}…` : micState === 'requesting' ? 'Waiting for permission…' : micState === 'processing' ? 'Transcribing & analyzing…' : 'Who is speaking?'}
         </p>
+        {listening && who && (
+          <p className="mt-1 flex items-center gap-1.5 text-sm text-zinc-400">
+            <who.Icon size={14} aria-hidden /> {who.role}
+            {recordingSpeaker === 'user' && ' · context only'}
+          </p>
+        )}
 
         {/* Activity meter */}
         <div className="mt-3 flex h-10 items-center gap-[3px]" aria-hidden>
@@ -66,7 +81,7 @@ function MicControl({ live }: { live: LiveCallController }) {
           {listening ? (
             <>
               <Button size="lg" variant="danger" onClick={live.stopAndAnalyze}>
-                <Square size={18} aria-hidden /> Stop &amp; analyze
+                <Square size={18} aria-hidden /> {recordingSpeaker === 'user' ? 'Stop & add' : 'Stop & analyze'}
               </Button>
               <Button size="lg" variant="ghost" onClick={live.cancelListening}>
                 <X size={18} aria-hidden /> Discard
@@ -74,16 +89,36 @@ function MicControl({ live }: { live: LiveCallController }) {
             </>
           ) : (
             <>
-              <Button size="lg" onClick={() => void live.startListening()} disabled={busy} className="font-display uppercase tracking-[0.16em]">
-                <Mic size={18} aria-hidden /> Start listening
-              </Button>
+              <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+                {(['caller', 'user'] as const).map((sp) => {
+                  const { label, role, Icon } = SPEAKER[sp];
+                  return (
+                    <Button
+                      key={sp}
+                      size="xl"
+                      variant={sp === 'caller' ? 'primary' : 'secondary'}
+                      onClick={() => void live.startListening(sp)}
+                      disabled={busy}
+                      aria-label={`Record ${label}: ${role}`}
+                      className="flex-col !gap-0.5"
+                    >
+                      <span className="inline-flex items-center gap-2 font-display text-lg uppercase tracking-[0.16em]">
+                        <Icon size={18} aria-hidden /> Record {label}
+                      </span>
+                      <span className={cx('text-xs font-normal', sp === 'caller' ? 'text-vault-950/75' : 'text-zinc-400')}>{role}</span>
+                    </Button>
+                  );
+                })}
+              </div>
               <Button size="lg" variant="secondary" onClick={() => void live.loadDemoAudio()} disabled={busy || demoLeft === 0}>
                 <AudioLines size={18} aria-hidden /> {demoLeft ? `Load demo audio ${session.demoIndex + 1}/${DEMO_CALL_SEGMENTS.length}` : 'Demo audio used'}
               </Button>
             </>
           )}
         </div>
-        <p className="mt-2 text-xs text-zinc-500">Demo audio is a pre-recorded sample call. It's transcribed live by ElevenLabs, just like the microphone.</p>
+        <p className="mt-2 text-xs text-zinc-500">
+          Record one turn at a time. Only what the caller says is scored; the user's replies are kept as context. Demo audio is a pre-recorded sample call (caller only), transcribed live by ElevenLabs just like the microphone.
+        </p>
 
         {micError && (
           <p role="alert" className="mt-4 flex items-start gap-2 rounded-lg border border-gold-500/40 bg-gold-400/10 px-3 py-2 text-left text-sm text-gold-100">
@@ -128,22 +163,37 @@ function highlight(text: string, signals: LedgerSignal[]): ReactNode {
 }
 
 function SegmentItem({ seg, signals, live }: { seg: Segment; signals: LedgerSignal[]; live: LiveCallController }) {
+  // Caller on the left, user on the right, each with its own label and icon (not colour alone).
+  const sp = speakerOf(seg);
+  const user = sp === 'user';
+  const { label, Icon } = SPEAKER[sp];
+  const bubble = user ? 'rounded-tr-sm' : 'rounded-tl-sm';
   return (
-    <motion.li initial={{ opacity: 0, y: 10, x: -8 }} animate={{ opacity: 1, y: 0, x: 0 }} className="flex max-w-[92%] flex-col gap-1 self-start" data-segment={seg.n}>
-      <span className="op-label flex flex-wrap items-center gap-2 text-[10px]">
-        Caller · segment {seg.n} · {formatClock(seg.at)}
+    <motion.li
+      initial={{ opacity: 0, y: 10, x: user ? 8 : -8 }}
+      animate={{ opacity: 1, y: 0, x: 0 }}
+      className={cx('flex max-w-[92%] flex-col gap-1', user ? 'items-end self-end' : 'self-start')}
+      data-segment={seg.n}
+      data-speaker={sp}
+    >
+      <span className={cx('op-label flex flex-wrap items-center gap-2 text-[10px]', user && 'justify-end')}>
+        <span className={cx('inline-flex items-center gap-1 font-semibold', user ? 'text-sky-300' : 'text-gold-300')}>
+          <Icon size={11} aria-hidden /> {label}
+        </span>
+        · segment {seg.n} · {formatClock(seg.at)}
+        {user && <span className="rounded border border-vault-500 px-1 py-px text-zinc-400">Context only</span>}
         <span className={cx('rounded border px-1 py-px', seg.source === 'demo' ? 'border-sky-500/50 text-sky-300' : 'border-vault-500 text-zinc-400')}>
           {seg.source === 'demo' ? 'Demo audio' : 'Mic'}
         </span>
         {seg.sttLatencyMs !== undefined && <span className="normal-case tracking-normal text-zinc-600">{seg.sttModel} · {(seg.sttLatencyMs / 1000).toFixed(1)}s</span>}
       </span>
       {seg.status === 'transcribing' && (
-        <p className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-vault-600 bg-vault-800 px-4 py-2.5 text-zinc-400">
+        <p className={cx('flex items-center gap-2 rounded-2xl border border-vault-600 bg-vault-800 px-4 py-2.5 text-zinc-400', bubble)}>
           <Loader2 size={16} className="animate-spin" aria-hidden /> Transcribing with ElevenLabs…
         </p>
       )}
       {seg.status === 'stt-failed' && (
-        <div className="rounded-2xl rounded-tl-sm border border-gold-500/40 bg-gold-400/5 px-4 py-3" role="alert">
+        <div className={cx('rounded-2xl border border-gold-500/40 bg-gold-400/5 px-4 py-3', bubble)} role="alert">
           <p className="text-gold-100">Transcription failed: {seg.error}</p>
           <p className="mt-1 text-xs text-zinc-500">No transcript was guessed. Retry, discard, or switch to typed mode.</p>
           <div className="mt-2 flex gap-2">
@@ -158,7 +208,7 @@ function SegmentItem({ seg, signals, live }: { seg: Segment; signals: LedgerSign
       )}
       {seg.status === 'transcribed' && seg.text && (
         <>
-          <p className={cx('rounded-2xl rounded-tl-sm border bg-vault-800 px-4 py-2.5 text-[17px] leading-relaxed text-zinc-100', signals.length ? 'border-red-500/40' : 'border-vault-600')}>
+          <p className={cx('rounded-2xl border px-4 py-2.5 text-[17px] leading-relaxed text-zinc-100', bubble, user ? 'border-sky-500/30 bg-vault-900' : 'bg-vault-800', signals.length ? 'border-red-500/40' : !user && 'border-vault-600')}>
             {highlight(seg.text, signals)}
           </p>
           {signals.length > 0 && (
@@ -186,7 +236,7 @@ function Timeline({ live, onTyped }: { live: LiveCallController; onTyped: () => 
     <Panel title="Conversation timeline" icon={<AudioLines size={13} aria-hidden />} right={session.startedAt ? <span className="flex items-center gap-2 font-mono text-xs text-red-300"><LiveDot className="text-red-500" /> SESSION</span> : null}>
       <div className="max-h-[460px] overflow-y-auto scrollbar-thin p-5" aria-live="polite">
         {session.segments.length === 0 ? (
-          <p className="text-zinc-500">No conversation yet. Record what the caller says (put the call on speaker), or load the demo audio. Each segment is added here and THE CREW re-assesses the whole conversation.</p>
+          <p className="text-zinc-500">No conversation yet. Use RECORD CALLER for what the caller says and RECORD USER for the replies, one turn at a time, or load the demo audio. Each segment is added here, and THE CREW re-assesses the whole conversation after every caller turn.</p>
         ) : (
           <ol className="flex flex-col gap-4">
             {session.segments.map((seg) => (

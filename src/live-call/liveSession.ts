@@ -11,11 +11,15 @@ import type { AgentId, AgentRuntime, Deployment, Intervention, RiskSignal, Signa
 
 export type SegmentStatus = 'transcribing' | 'transcribed' | 'stt-failed';
 
+/** Who was speaking: chosen explicitly before recording. Missing ⇒ caller (demo audio, older segments). */
+export type Speaker = 'caller' | 'user';
+
 export interface Segment {
   id: string;
   n: number;
   at: number; // session seconds
   source: 'mic' | 'demo';
+  speaker?: Speaker;
   status: SegmentStatus;
   text?: string;
   error?: string;
@@ -41,13 +45,22 @@ const norm = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+export const speakerOf = (s: Segment): Speaker => s.speaker ?? 'caller';
+
+/** USER segments are context only: only a CALLER segment triggers a fresh analysis. */
+export const triggersAnalysis = (s: Segment): boolean => speakerOf(s) === 'caller';
+
+/** True once the conversation has something the caller said: nothing to analyse before that. */
+export const hasCallerSpeech = (segments: Segment[]): boolean =>
+  segments.some((s) => s.status === 'transcribed' && !!s.text && speakerOf(s) === 'caller');
+
 /** Conversation text sent to Gemini: the most recent segments that fit, oldest first. */
 export function buildAnalysisText(segments: Segment[]): string {
   const lines: string[] = [];
   let used = 0;
   for (const s of [...segments].reverse()) {
     if (s.status !== 'transcribed' || !s.text) continue;
-    const line = `CALLER: ${s.text}`;
+    const line = `${speakerOf(s).toUpperCase()}: ${s.text}`;
     if (used + line.length + 1 > MAX_ANALYSIS_CHARS) {
       if (!lines.length) lines.unshift(line.slice(0, MAX_ANALYSIS_CHARS));
       break;
@@ -70,6 +83,18 @@ export function findPhrase(text: string, phrase: string): [number, number] | nul
 }
 
 /**
+ * Scam tactics are attributed to the caller only. Gemini sees the whole conversation, but a
+ * signal whose evidence appears only in what the USER said (e.g. "Why do you need $2,500?")
+ * is dropped before it can reach the risk engine. Evidence the caller said is kept even if the
+ * user repeated it; evidence found nowhere (paraphrased) keeps its existing ungrounded handling.
+ */
+export function filterCallerSignals(signals: LiveSignal[], segments: Segment[]): LiveSignal[] {
+  const said = (who: Speaker, evidence: string) =>
+    segments.some((s) => s.status === 'transcribed' && s.text && speakerOf(s) === who && findPhrase(s.text, evidence));
+  return signals.filter((sig) => said('caller', sig.evidence) || !said('user', sig.evidence));
+}
+
+/**
  * Merge a fresh Gemini analysis of the conversation into the ledger.
  * Same tactic + same evidence ⇒ one entry (strongest confidence kept), so re-analysing
  * the whole conversation every segment never inflates the score.
@@ -84,7 +109,8 @@ export function mergeSignals(ledger: LedgerSignal[], fresh: LiveSignal[], segmen
       existing.evidence_verbatim = existing.evidence_verbatim || sig.evidence_verbatim;
       continue;
     }
-    const seg = [...segments].reverse().find((s) => s.text && findPhrase(s.text, sig.evidence));
+    // Evidence is only ever attributed to something the caller said.
+    const seg = [...segments].reverse().find((s) => speakerOf(s) === 'caller' && s.text && findPhrase(s.text, sig.evidence));
     out.push({ ...sig, key, segmentId: seg?.id, firstSeenAt: at });
   }
   return out;
